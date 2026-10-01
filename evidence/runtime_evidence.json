@@ -1,0 +1,137 @@
+{
+  "index": {
+    "status": 200,
+    "content_type": "text/html; charset=utf-8",
+    "bytes": 46100
+  },
+  "health": {
+    "status": "ok",
+    "gate": "fail-closed"
+  },
+  "valid": {
+    "decision": "ALLOW",
+    "stage": "10-execute",
+    "execution_status": "SUCCESS",
+    "record": "Northwind Traders",
+    "mrr": 18400,
+    "receipt_id": "RCPT-70A77D72",
+    "authorization_integrity": "",
+    "evidence_hash": "af1:sha256:f535755dd61b521db7bd3efb09f95089",
+    "mode": "DEMO"
+  },
+  "attacks": [
+    {
+      "attack": "resource substitution",
+      "decision": "DENY",
+      "reason": "RESOURCE_MISMATCH",
+      "stage": "5-bindings",
+      "expected": {
+        "resource": "customer/123"
+      },
+      "received": {
+        "resource": "customer/999"
+      }
+    },
+    {
+      "attack": "capability substitution",
+      "decision": "DENY",
+      "reason": "CAPABILITY_MISMATCH",
+      "stage": "5-bindings",
+      "expected": {
+        "capability": "customer.read"
+      },
+      "received": {
+        "capability": "customer.delete"
+      }
+    },
+    {
+      "attack": "action substitution",
+      "decision": "DENY",
+      "reason": "ACTION_MISMATCH",
+      "stage": "5-bindings",
+      "expected": {
+        "action": "read"
+      },
+      "received": {
+        "action": "delete"
+      }
+    },
+    {
+      "attack": "origin substitution",
+      "decision": "DENY",
+      "reason": "ORIGIN_MISMATCH",
+      "stage": "5-bindings",
+      "expected": {
+        "origin": "CRM-A"
+      },
+      "received": {
+        "origin": "CRM-B"
+      }
+    },
+    {
+      "attack": "task replay",
+      "decision": "DENY",
+      "reason": "TASK_CONTEXT_MISMATCH",
+      "stage": "5-bindings",
+      "expected": {
+        "task": "TASK-184"
+      },
+      "received": {
+        "task": "TASK-185"
+      }
+    },
+    {
+      "attack": "agent substitution",
+      "decision": "DENY",
+      "reason": "AGENT_MISMATCH",
+      "stage": "5-bindings",
+      "expected": {
+        "agent": "research-agent"
+      },
+      "received": {
+        "agent": "support-agent"
+      }
+    },
+    {
+      "attack": "expired authorization",
+      "decision": "DENY",
+      "reason": "AUTHORIZATION_EXPIRED",
+      "stage": "4-validity",
+      "expected": {},
+      "received": {}
+    },
+    {
+      "attack": "tampered authorization",
+      "decision": "DENY",
+      "reason": "INTEGRITY_MISMATCH",
+      "stage": "2-integrity",
+      "expected": {},
+      "received": {}
+    },
+    {
+      "attack": "no authorization",
+      "decision": "DENY",
+      "reason": "MISSING_AUTHORIZATION",
+      "stage": "1-authorization",
+      "expected": {},
+      "received": {}
+    }
+  ],
+  "approval_flow": {
+    "step1_no_approval": {
+      "decision": "DENY",
+      "reason": "APPROVAL_MISSING",
+      "required": true
+    },
+    "step2_approved": {
+      "approval_id": "APPR-40599408",
+      "approver": "human.jay",
+      "decision": "ALLOW",
+      "execution_status": "SUCCESS"
+    },
+    "step3_replayed_other_task": {
+      "decision": "DENY",
+      "reason": "TASK_CONTEXT_MISMATCH"
+    }
+  }
+}

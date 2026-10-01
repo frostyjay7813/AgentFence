@@ -554,8 +554,16 @@ async function run(kind) {
   if (kind === "valid") {
     setBanner(true, "EXECUTING…", "Reconstructing execution context at the boundary.", null, null);
   } else if (kind === "expire") {
-    auth.expires_at = Date.now() - 1000;   // backdated on purpose; integrity recomputed so
-    auth.integrity_value = await localIntegrity(auth);  // EXPIRY, not tampering, is what fails
+    // Ask the server for a properly-sealed authorization whose window is already closed.
+    // Backdating a live authorization would break its integrity value, and expiry would
+    // then be reported as tampering instead — the exact lesson this button exists to show.
+    try {
+      const fresh = await api("/api/expire", { method: "POST", body: JSON.stringify({}) });
+      if (fresh && fresh.authorization) auth = fresh.authorization;
+    } catch (e) {
+      auth.expires_at = Date.now() - 1000;             // fallback for the offline mode
+      auth.integrity_value = await localIntegrity(auth);
+    }
     setBanner(false, "EXPIRED AUTHORIZATION", "Attempting execution after expiry.", null, null);
   } else if (kind === "tamper") {
     auth.resource = "customer/999";        // tampered WITHOUT recomputing integrity

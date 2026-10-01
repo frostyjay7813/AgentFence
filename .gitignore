@@ -7,4 +7,5 @@ node_modules/
 .aws/
 *.pem
 .env
+function.zip
 .DS_Store

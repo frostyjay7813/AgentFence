@@ -1,16 +1,17 @@
-# AgentFence — AWS Console Deployment (exact steps)
+# AgentFence — AWS Deployment (exact console steps)
 
 Repo: **https://github.com/frostyjay7813/AgentFence**
-Region used in examples: **us-east-1** (pick any region you have enabled)
+Time: **~10 minutes.** Two steps, in order.
 
-Expected total time: **~15 minutes**. Do the steps **in order** — Step 1 must
-come first because Step 2's API Gateway needs the Lambda ARN.
+> **The Lambda serves the demo page itself.** You do **not** need S3, CloudFront, a
+> custom domain, or any CORS configuration. One API Gateway URL is the whole app.
 
 ---
 
-## STEP 1 — Create the Lambda function
+## STEP 1 — Create the Lambda function from the prebuilt package
 
-The function must exist **before** the stack, because API Gateway integrates with it by ARN.
+The file **`function.zip`** is in the repo root and is the exact deployment artifact.
+It is already verified — it was tested from the extracted archive, not just the source tree.
 
 **Lambda → Create function**
 
@@ -23,211 +24,124 @@ The function must exist **before** the stack, because API Gateway integrates wit
 
 Then:
 
-1. **Configuration → General configuration → Edit**
-   - **Timeout: 15 seconds**
-   - **Memory: 512 MB**
-   - Click **Save**
+1. **Configuration → General configuration → Edit** → **Timeout: 15 seconds**, **Memory: 512 MB** → **Save**
+2. **Code tab → Upload a .zip file → Upload** → choose `function.zip` → **Save**
 
-2. **Code → Deploy new code**
-   - Source code: **Edit code in Lambda**
-   - Delete the default `lambda_function` stub.
-   - Click the orange **"Add folder"** button (or drag files in) and upload the whole
-     `agentfence/` folder from the repo so it lands at the function root:
-     ```
-     agentfence/
-       __init__.py
-       api.py        <- handler
-       core.py
-       gate.py
-       policy.py
-     ```
-     **Important:** Lambda's inline editor does not support nested folders well. If
-     "Add folder" is awkward, use the **preferred method below** instead.
-   - Set **Handler** to `agentfence.api.lambda_handler`
-   - Click **Deploy**
+> If you cloned the repo instead, regenerate it with:
+> ```bash
+> python scripts/package.py     # prints the file list and verifies contents
+> ```
 
-### Preferred alternative (avoids the inline editor entirely)
+3. **Copy the function ARN** (top-right of the Code tab). It looks like:
+   ```
+   arn:aws:lambda:us-east-1:123456789012:function:agentfence-api
+   ```
 
-If you have the AWS CLI or CodeShell available, this is more reliable:
-
-```bash
-# from a clone of the repo
-cd AgentFence
-zip -r function.zip agentfence
-aws lambda update-function-code \
-  --function-name agentfence-api \
-  --zip-file fileb://function.zip \
-  --publish
-```
-
-**Then copy the function ARN** — you need it for Step 2. It looks like:
-```
-arn:aws:lambda:us-east-1:123456789012:function:agentfence-api
-```
-
-3. **Configuration → Environment variables → Edit**, add:
+4. **Configuration → Environment variables → Edit** → add:
    - `AGENTFENCE_MODE` = `DEMO`
-   - Save.
+   - **Save**
 
 ---
 
-## STEP 2 — Deploy the infrastructure stack
+## STEP 2 — Deploy the stack (API Gateway + DynamoDB + scoped IAM)
 
 **CloudFormation → Stacks → Create stack → Upload template**
 
-1. **Template**: upload `infra/template.yaml` from the repo
-2. Click **Next**
-3. **Stack name**: `agentfence`
-4. **Parameters** — set these:
+1. Upload **`infra/template.yaml`** → **Next**
+2. **Stack name**: `agentfence`
+3. **Parameters**:
 
 | Parameter | Value |
 |---|---|
-| `Project` | `agentfence` (default is fine) |
-| `LogRetention` | `14` (default) |
-| `FuncArn` | **paste the Lambda ARN from Step 1** |
+| `Project` | `agentfence` |
+| `LogRetention` | `14` |
+| `FuncArn` | **the ARN you copied in Step 1** |
 
-5. Click **Next → Create**
-6. Wait for `CREATE_COMPLETE` (1–2 minutes)
-7. Open the **Outputs** tab and record:
-   - **`ApiUrl`** → this is your API base URL, e.g.
-     `https://abc123.execute-api.us-east-1.amazonaws.com/prod`
+4. **Next → Create** → wait for `CREATE_COMPLETE` (1–2 min)
+5. Open the **Outputs** tab. Copy **`ApiUrl`**, e.g.:
+   ```
+   https://abc123def4.execute-api.us-east-1.amazonaws.com/prod
+   ```
+
+**That URL is the submission.** Append nothing. It serves both the page and the API.
 
 ---
 
-## STEP 3 — Upload the demo front-end to S3
+## STEP 3 — Wire persistence (30 seconds, recommended)
 
-1. **S3 → Buckets → `agentfence-site-<accountid>-us-east-1`**
-2. Delete the pre-created placeholder objects if any.
-3. Click **Upload → Upload files** and upload **`web/index.html`** to the bucket root.
+The Lambda already has read/write permission to the audit table, but the table name is
+not yet in the function's environment. To make the **Audit** tab persist to DynamoDB:
 
-### Give it a real public HTTPS URL (recommended)
+1. **Lambda → agentfence-api → Configuration → Environment variables → Edit**
+2. Add: `AGENTFENCE_AUDIT_TABLE` = `agentfence-audit` → **Save**
 
-The S3 bucket itself is not web-addressable until you enable static hosting.
-
-1. In the bucket → **Properties → Static website hosting → Edit**
-2. **Static website hosting: Enable**
-3. Index document: `index.html`, Error document: `index.html`
-4. Save. You'll get a URL like:
-   ```
-   http://agentfence-site-123456789012.s3-website-us-east-1.amazonaws.com/index.html
-   ```
-
-> **This URL is HTTP-only.** For a judge-facing **HTTPS** link, either:
-> - Open the bucket's **Properties → Static website hosting** and use the
->   **CloudFront** distribution you create in Step 4, or
-> - In the console choose **Properties → Static website → Edit** and then use the
->   **"Open website"** button, which gives the working (HTTP) URL while you set up
->   CloudFront for the final HTTPS link.
+**Skip this and the demo still works perfectly** — receipts are returned inline and
+shown in the Audit tab; only the cross-session history is lost.
 
 ---
 
-## STEP 4 — Front it with CloudFront (HTTPS)
+## STEP 4 — Verify the live gate (do this from a clean/incognito window)
 
-1. **CloudFront → Create distribution**
-2. **Origin**: choose **S3** → select the `agentfence-site-...` bucket
-   > If using the website endpoint (recommended, because the API is on a different
-   > origin anyway), set **Origin path** empty and **Origin protocol** to **HTTP only**.
-3. **Viewer protocol policy**: **Redirect HTTP to HTTPS**
-4. **Allowed methods**: GET, HEAD, OPTIONS
-5. Do **not** enable Origin Access Control if you are using the public website
-   endpoint. (If you later lock the bucket down with OAC, re-upload the page.)
-6. **Create and wait for Deployed**, then copy the **domain name**:
-   ```
-   https://d1234abcd.cloudfront.net
-   ```
+This is the pass/fail check. Work down the list.
 
----
-
-## STEP 5 — Point the demo at the live API
-
-The page currently calls the API **same-origin** (`API = ""`). Since the page is
-served from CloudFront/S3 and the API is on API Gateway, set the API base URL:
-
-1. Edit `web/index.html` in the repo, find near the bottom of the `<script>` block:
-   ```js
-   const API = "";
-   ```
-   change to:
-   ```js
-   const API = "https://abc123.execute-api.us-east-1.amazonaws.com/prod";
-   ```
-2. Commit and push, then **re-upload `index.html` to S3**.
-
-> **CORS note:** the Lambda returns `Content-Type: application/json` and no CORS
-> headers, so a cross-origin call from the CloudFront page will be blocked by the
-> browser. Two clean options:
-> - **(A) Fastest — skip CloudFront for the page.** Use the S3 website URL and add
->   the API Gateway URL as a query param the page reads. *I can patch the page to
->   accept `?api=` so no rebuild is needed.*
-> - **(B) Correct — serve the page from the same API.** Add the static HTML as the
->   Lambda response for `GET /` so there is one origin and no CORS at all. This is the
->   cleanest single-URL demo. *I can implement this in ~10 lines.*
-
-**Recommended: option B.** One public HTTPS URL for both page and API is a much
-better judge experience. Tell me and I'll add it.
-
----
-
-## STEP 6 — Verify before you submit (the live gate)
-
-Run every one of these from a **clean browser / incognito window**:
-
-| # | Check | Expected |
+| # | Action | Expected result |
 |---|---|---|
-| 1 | Open the public HTTPS URL | Landing page renders |
-| 2 | Click **Launch Interactive Demo** | Demo loads, shows `TASK-184` / `research-agent` / `customer.read` |
-| 3 | `/health` on the API URL | `{"status":"ok","gate":"fail-closed"}` |
-| 4 | Click **Execute valid action** | `EXECUTION ALLOWED`, record returned, receipt appears |
-| 5 | Click **Change resource** | `EXECUTION DENIED · RESOURCE_MISMATCH` |
-| 6 | Click **Change action** | `EXECUTION DENIED · CAPABILITY_MISMATCH` |
-| 7 | Click **Change origin** | `EXECUTION DENIED · ORIGIN_MISMATCH` |
-| 8 | Click **Replay task** | `EXECUTION DENIED · TASK_CONTEXT_MISMATCH` |
-| 9 | Click **Expire authorization** | `EXECUTION DENIED · AUTHORIZATION_EXPIRED` |
-| 10 | Click **Refresh audit trail** | Receipt rows appear with `DEMO` mode label |
-| 11 | Click **Run approval flow** | `APPROVAL_MISSING` → then `ALLOW` with approval ID |
+| 1 | Open the `ApiUrl` in a clean browser | Landing page renders, headline "Authorization that follows the action." |
+| 2 | Click **Launch Interactive Demo** | Shows `TASK-184` · `research-agent` · `customer.read` |
+| 3 | Open `<ApiUrl>/health` | `{"status":"ok","gate":"fail-closed",...}` |
+| 4 | **Execute valid action** | `EXECUTION ALLOWED` + "Northwind Traders" + a receipt |
+| 5 | **Change resource** | `EXECUTION DENIED` · `RESOURCE_MISMATCH` |
+| 6 | **Change action** | `EXECUTION DENIED` · `CAPABILITY_MISMATCH` |
+| 7 | **Change origin** | `EXECUTION DENIED` · `ORIGIN_MISMATCH` (shows expected vs received) |
+| 8 | **Replay task** | `EXECUTION DENIED` · `TASK_CONTEXT_MISMATCH` |
+| 9 | **Expire authorization** | `EXECUTION DENIED` · `AUTHORIZATION_EXPIRED` |
+| 10 | **Tamper integrity** | `EXECUTION DENIED` · `INTEGRITY_MISMATCH` |
+| 11 | **Refresh audit trail** | Receipt rows appear, each labelled `DEMO` |
+| 12 | **Run approval flow** | `APPROVAL_MISSING` → then `ALLOW` with an approval ID |
+| 13 | **Replay the approval under TASK-185** | `APPROVAL REJECTED` |
 
-If step 5–8 show anything other than DENY, **do not submit** — tell me and I will fix it.
-
----
-
-## STEP 7 — Capture the coding-agent evidence
-
-The hackathon requires proof a coding agent was connected to the AWS console.
-
-The most credible artifact: **this Hermes agent built AgentFence end-to-end**
-(policy engine, gate, tests, front-end, CloudFormation), and you deploy it with an
-AWS-connected coding agent or the console. To satisfy this cleanly:
-
-1. Use an AWS-connected coding agent (Claude Code with the AgentCore toolkit, Amazon
-   Q Developer CLI, or Kiro) to deploy the stack from this repo, **or**
-2. Have your coding agent perform the console steps above and capture the session log.
-
-Save the transcript into `evidence/coding-agent/` with secrets redacted. I have
-already scaffolded `evidence/coding-agent/CODING_AGENT_PROOF.md` for this.
+**If steps 5–10 show anything other than DENY, do not submit — tell me and I will fix it.**
 
 ---
 
-## Least privilege (what you are deploying)
+## STEP 5 — Least-privilege check (do this, it is part of the evidence)
 
-Verify in **IAM → Roles → agentfence** after deploying. The execution role should have
-exactly two DynamoDB actions scoped to one table:
+**IAM → Roles → `agentfence`** and confirm the role contains **only**:
 
 ```
-dynamodb:PutItem   arn:aws:dynamodb:us-east-1:<account>:table/agentfence-audit
-dynamodb:Scan      arn:aws:dynamodb:us-east-1:<account>:table/agentfence-audit
+dynamodb:PutItem   arn:aws:dynamodb:<region>:<account>:table/agentfence-audit
+dynamodb:Scan      arn:aws:dynamodb:<region>:<account>:table/agentfence-audit
+logs:CreateLogGroup / CreateLogStream / PutLogEvents   (log-group:/aws/lambda/agentfence-*)
 ```
 
-plus CloudWatch Logs writes. There should be **no `AdministratorAccess`** anywhere.
-The audit template (`submission/SECURITY_TESTS.md`) records this check.
+There must be **no `AdministratorAccess`** and no wildcard resource. Paste what you see
+into `submission/SECURITY_TESTS.md`.
 
 ---
 
 ## Troubleshooting
 
-| Symptom | Fix |
+| Symptom | Cause / fix |
 |---|---|
-| Stack fails on `FuncArn` | You skipped Step 1, or pasted the function **name** instead of its **ARN** |
-| API returns `{"error":"NOT_FOUND"}` | The `ApiUrl` needs the `/prod` suffix (it's in the Outputs tab) |
-| Page loads but demo buttons do nothing | Cross-origin CORS — use Step 5 option B |
-| Lambda 500s with `ModuleNotFoundError` | The `agentfence/` folder is not at the function root; use the zip upload method |
-| `SignatureDoesNotMatch` | Nothing to do with AgentFence — it's the AWS CLI call. Use console upload instead |
+| Page loads but buttons do nothing | Open the **browser console**. If you see a CORS error, you are loading the page from S3/CloudFront instead of from the `ApiUrl` — use the `ApiUrl` only. |
+| `{"error":"NOT_FOUND"}` | You dropped the `/prod` suffix. Use the exact `ApiUrl` from Outputs. |
+| `ModuleNotFoundError: agentfence` | The zip layout is wrong. Use the prebuilt `function.zip`; do not zip the folder itself (you'd get `agentfence/agentfence/...`). Verify with `unzip -l function.zip`. |
+| `Internal server error` on `/health` | Check **CloudWatch → Log Groups → `/aws/lambda/agentfence-api`** for the traceback. |
+| Stack fails: "Value of property FuncArn is invalid" | You pasted the function **name** instead of the **ARN**. It must start `arn:aws:lambda:`. |
+| `CAPABILITY_MISMATCH` fires on the valid action | You edited `web/index.html` inside the zip and broke the scenario fields. Re-upload the pristine `function.zip`. |
+
+---
+
+## What is deployed (for your architecture section)
+
+**AWS infrastructure:** Lambda (Python 3.12, arm64) · API Gateway (REST, proxy) · DynamoDB
+(on-demand, 90-day TTL, PITR, SSE) · CloudWatch Logs (14-day retention) · IAM (scoped
+execution role) · CloudFormation.
+
+**AgentFence application logic** (none of this is an AWS feature): canonicalization ·
+SHA-256 integrity values · the binding check · the deterministic policy table ·
+approval binding · the ten-stage gate ordering · evidence receipts.
+
+Deliberately **not** used: Bedrock / AgentCore in the critical path. The thesis is the
+authorization binding, which is AgentFence logic. A service was not added to the stack
+for marketing value.

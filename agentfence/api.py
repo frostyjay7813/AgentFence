@@ -203,6 +203,28 @@ def handle_approve(body, _headers):
     return 200, {"approval": ap.to_dict()}
 
 
+def handle_expire(_body, _headers):
+    """Issue a correctly-sealed authorization whose validity window is already closed.
+
+    The demo must NOT mutate a live authorization to demo expiry: changing any field
+    invalidates its integrity value, so expiry would be reported as tampering and the
+    AUTHORIZATION_EXPIRED path would be unreachable. Issuing an already-expired,
+    properly sealed authorization is both honest and the only way to show this stage.
+    """
+    auth = issue(
+        principal="svc-research",
+        agent="research-agent",
+        capability="customer.read",
+        action="read",
+        resource="customer/123",
+        origin="CRM-A",
+        task="TASK-184",
+        policy_version=POLICY_VERSION,
+        ttl_ms=-60_000,  # already expired at issuance
+    )
+    return 200, {"authorization": auth.to_dict(), "note": "validity window closed before use"}
+
+
 def handle_execute(body, _headers):
     """
     THE GATE. Accepts a request + authorization (+ optional approval) and returns the
@@ -268,6 +290,8 @@ ROUTES = {
     "POST /api/authorize": handle_authorize,
     "POST /api/approve": handle_approve,
     "POST /api/execute": handle_execute,
+    "POST /api/expire": handle_expire,
+    "GET /api/expire": handle_expire,
     "GET /api/audit": handle_audit,
 }
 
