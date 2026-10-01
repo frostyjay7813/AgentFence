@@ -1,0 +1,3 @@
+# AgentFence runtime dependencies
+# Intentionally ZERO third-party runtime deps: the authorization engine must be
+# auditable end-to-end and must behave identically in Lambda and locally.
