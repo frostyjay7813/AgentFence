@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AgentFence — Authorization that follows the action</title>
+<meta name="description" content="AgentFence binds AI-agent authorization to the exact action, resource, origin and task it was issued for, and verifies those bindings again at the execution boundary." />
+<style>
+  :root{
+    --bg:#080b14; --panel:#0f1424; --panel2:#151b2e; --line:#232b45;
+    --text:#e8ecf8; --muted:#8b95b5; --dim:#5f6a8a;
+    --ok:#34d399; --deny:#f87171; --warn:#fbbf24; --accent:#818cf8; --accent2:#38bdf8;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;line-height:1.55}
+  a{color:var(--accent2);text-decoration:none} a:hover{text-decoration:underline}
+  header{border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(8,11,20,.92);
+    backdrop-filter:blur(10px);z-index:50}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 20px}
+  .hrow{display:flex;align-items:center;justify-content:space-between;padding:14px 0}
+  .logo{font-weight:800;letter-spacing:-.02em;font-size:17px;display:flex;align-items:center;gap:9px}
+  .shield{width:22px;height:22px;background:linear-gradient(135deg,var(--accent),var(--accent2));
+    border-radius:6px;display:grid;place-items:center;font-size:12px;color:#080b14;font-weight:900}
+  nav{display:flex;gap:5px;flex-wrap:wrap}
+  nav a{padding:7px 13px;border-radius:8px;color:var(--muted);font-size:13.5px;font-weight:600}
+  nav a:hover,nav a.on{background:var(--panel2);color:var(--text);text-decoration:none}
+  .mode{font-family:var(--mono);font-size:11px;padding:4px 10px;border-radius:999px;
+    border:1px solid var(--line);color:var(--warn);background:rgba(251,191,36,.08)}
+  main{padding:36px 0 80px}
+  h1{font-size:44px;line-height:1.1;margin:0 0 14px;letter-spacing:-.03em}
+  h2{font-size:23px;margin:40px 0 14px;letter-spacing:-.02em}
+  .sub{color:var(--muted);font-size:17px;max-width:720px;margin:0 0 24px}
+  .cta{display:flex;gap:12px;flex-wrap:wrap;margin:26px 0}
+  .btn{padding:12px 20px;border-radius:10px;font-weight:700;font-size:14.5px;cursor:pointer;
+    border:1px solid var(--line);background:var(--panel2);color:var(--text);font-family:inherit}
+  .btn:hover{border-color:var(--accent);text-decoration:none}
+  .btn.pri{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#080b14;border:none}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .grid{display:grid;gap:16px}
+  .g2{grid-template-columns:1fr 1fr}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+  .card h3{margin:0 0 8px;font-size:15px}
+  .card p{margin:0;color:var(--muted);font-size:14px}
+  .kv{display:flex;justify-content:space-between;gap:12px;padding:7px 0;
+    border-bottom:1px dashed var(--line);font-size:13.5px}
+  .kv:last-child{border-bottom:none}
+  .kv .k{color:var(--dim);font-family:var(--mono);font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+  .kv .v{font-family:var(--mono);font-size:13px;text-align:right;word-break:break-all}
+  .v.good{color:var(--ok)} .v.bad{color:var(--deny)} .v.warn{color:var(--warn)}
+  .auth{background:linear-gradient(160deg,#141a2e,#0f1424);border:1px solid var(--line);
+    border-radius:16px;padding:22px;font-family:var(--mono)}
+  .auth .tag{font-size:11px;letter-spacing:.16em;color:var(--dim);text-transform:uppercase;
+    margin-bottom:14px;display:block}
+  .banner{border-radius:14px;padding:18px 20px;margin:18px 0;font-family:var(--mono);font-size:14px}
+  .allow{background:rgba(52,211,153,.09);border:1px solid rgba(52,211,153,.35)}
+  .denied{background:rgba(248,113,113,.09);border:1px solid rgba(248,113,113,.35)}
+  .banner .big{font-size:19px;font-weight:800;letter-spacing:.03em;margin-bottom:10px}
+  .allow .big{color:var(--ok)} .denied .big{color:var(--deny)}
+  .diff{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0}
+  .diff>div{padding:10px 12px;border-radius:9px;background:rgba(0,0,0,.28);font-size:13px}
+  .diff .lab{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);display:block;margin-bottom:5px}
+  .diff .exp{color:var(--ok)} .diff .got{color:var(--deny)}
+  .btns{display:flex;gap:9px;flex-wrap:wrap;margin:18px 0}
+  .btns .btn{font-size:13px;padding:9px 14px}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:700}
+  td.mono{font-family:var(--mono);font-size:12.5px}
+  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:800;
+    font-family:var(--mono);letter-spacing:.04em}
+  .pill.allow{background:rgba(52,211,153,.14);color:var(--ok)}
+  .pill.deny{background:rgba(248,113,113,.14);color:var(--deny)}
+  .pill.req{background:rgba(251,191,36,.14);color:var(--warn)}
+  pre{background:#060911;border:1px solid var(--line);border-radius:12px;padding:16px;
+    overflow:auto;font-family:var(--mono);font-size:12px;line-height:1.65;color:#cbd5e1;max-height:460px}
+  .flow{font-family:var(--mono);font-size:12.5px;line-height:2.05;background:#060911;
+    border:1px solid var(--line);border-radius:12px;padding:20px;overflow:auto}
+  .flow .node{color:var(--text);font-weight:700}
+  .flow .aws{color:var(--accent2)}
+  .flow .af{color:var(--ok)}
+  .flow .lbl{color:var(--dim)}
+  .note{border-left:3px solid var(--accent);padding:12px 16px;background:rgba(129,140,248,.06);
+    border-radius:0 10px 10px 0;margin:18px 0;font-size:14px;color:var(--muted)}
+  .note strong{color:var(--text)}
+  footer{border-top:1px solid var(--line);padding:26px 0;color:var(--dim);font-size:13px}
+  .hidden{display:none!important}
+  .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line);
+    border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .sect{display:none} .sect.on{display:block}
+  footer code{color:var(--muted)}
+  @media(max-width:860px){.g2,.g3{grid-template-columns:1fr}h1{font-size:32px}.diff{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="hrow">
+    <div class="logo"><div class="shield">F</div> AgentFence</div>
+    <nav>
+      <a href="#" data-s="home">Home</a>
+      <a href="#" data-s="demo" class="on">Demo</a>
+      <a href="#" data-s="authz">Authorizations</a>
+      <a href="#" data-s="policy">Policies</a>
+      <a href="#" data-s="audit">Audit</a>
+      <a href="#" data-s="arch">Architecture</a>
+    </nav>
+    <div class="mode" id="modeBadge">MODE: DEMO</div>
+  </div>
+</div></header>
+
+<main class="wrap">
+
+<!-- ============================ HOME ============================ -->
+<section class="sect" id="s-home">
+  <h1>Authorization that follows the action.</h1>
+  <p class="sub">AgentFence binds AI-agent permissions to the exact action, resource, origin and
+  task they were issued for — and verifies those bindings again at the execution boundary.</p>
+  <div class="cta">
+    <button class="btn pri" onclick="go('demo')">Launch Interactive Demo</button>
+    <button class="btn" onclick="go('arch')">View Architecture</button>
+  </div>
+  <div class="grid g3" style="margin-top:34px">
+    <div class="card"><h3>Not "agent may read"</h3><p>An AgentFence authorization names one action, one
+    resource, one origin and one task. There is no wildcard and no standing permission.</p></div>
+    <div class="card"><h3>Verified again, at the boundary</h3><p>The execution gate reconstructs the live
+    context and re-checks every binding. A mismatch is a denial, not a warning.</p></div>
+    <div class="card"><h3>Every decision leaves evidence</h3><p>Allow or deny, each produces a receipt with
+    integrity value, policy version and approval reference.</p></div>
+  </div>
+  <div class="note"><strong>The honest scope.</strong> Modern agent protocols deliberately leave
+  in-task authorization scope, validity and revocation semantics to implementations, credential issuers or
+  extensions — A2A 1.0 states this explicitly. AgentFence demonstrates <em>one</em> implementation strategy for
+  making those semantics explicit and execution-bound. It is a demonstration pattern, not a complete IAM system.</div>
+</section>
+
+<!-- ============================ DEMO ============================ -->
+<section class="sect on" id="s-demo">
+  <h2>Interactive demonstration</h2>
+  <p class="sub" style="font-size:15px">An agent is authorized to read one customer record from one origin
+  during one task. The action succeeds. Then the <em>same authorization</em> is replayed against altered
+  contexts — every one is denied.</p>
+
+  <div class="grid g2" style="align-items:start">
+    <div>
+      <div class="auth">
+        <span class="tag">Authorization — issued by policy, bound to context</span>
+        <div class="kv"><span class="k">Principal</span><span class="v" id="aPrincipal">—</span></div>
+        <div class="kv"><span class="k">Agent</span><span class="v" id="aAgent">—</span></div>
+        <div class="kv"><span class="k">Capability</span><span class="v" id="aCap">—</span></div>
+        <div class="kv"><span class="k">Action</span><span class="v" id="aAction">—</span></div>
+        <div class="kv"><span class="k">Resource</span><span class="v" id="aRes">—</span></div>
+        <div class="kv"><span class="k">Origin</span><span class="v" id="aOrigin">—</span></div>
+        <div class="kv"><span class="k">Task</span><span class="v" id="aTask">—</span></div>
+        <div class="kv"><span class="k">Expires</span><span class="v" id="aExp">—</span></div>
+        <div class="kv"><span class="k">Policy</span><span class="v" id="aPol">—</span></div>
+        <div class="kv"><span class="k">Auth ID</span><span class="v" id="aId">—</span></div>
+        <div class="kv"><span class="k">Integrity</span><span class="v" id="aInt" style="font-size:11.5px">—</span></div>
+      </div>
+
+      <div class="btns">
+        <button class="btn pri" id="bRun" onclick="run('valid')">▶ Execute valid action</button>
+      </div>
+      <div class="btns">
+        <span style="font-size:12px;color:var(--dim);align-self:center;letter-spacing:.06em">THEN TRY:</span>
+        <button class="btn" onclick="run('resource')">Change resource</button>
+        <button class="btn" onclick="run('action')">Change action</button>
+        <button class="btn" onclick="run('origin')">Change origin</button>
+        <button class="btn" onclick="run('task')">Replay task</button>
+        <button class="btn" onclick="run('expire')">Expire authorization</button>
+        <button class="btn" onclick="run('tamper')">Tamper integrity</button>
+      </div>
+    </div>
+
+    <div>
+      <div id="banner" class="banner allow">
+        <div class="big" id="bTitle">READY</div>
+        <div id="bBody">Execute the valid action, or apply a context substitution to observe the gate deny it.</div>
+        <div id="bDiff"></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <h3>Execution request — as reconstructed at the boundary</h3>
+        <div id="reqView" style="font-family:var(--mono);font-size:12.5px;color:var(--muted);line-height:1.95"></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <h3>Evidence receipt <span style="color:var(--dim);font-weight:400">— produced on every decision</span></h3>
+        <div id="rcptView" style="font-family:var(--mono);font-size:12.5px;line-height:1.95;color:var(--muted)">
+          No execution yet. The receipt is the visual conclusion of the demo.</div>
+      </div>
+    </div>
+  </div>
+
+  <h2>Approval flow — approve <em>this</em> authorization, not "approve the agent"</h2>
+  <p class="sub" style="font-size:15px"><code>customer.write</code> requires approval. The approval is bound to
+  the authorization's action, resource, origin and task. Change any of them and the approval no longer applies.</p>
+  <div class="btns">
+    <button class="btn pri" onclick="runApproval()">Run approval flow</button>
+    <button class="btn" onclick="runApprovalTransfer()">Then replay the approval under TASK-185</button>
+  </div>
+  <div id="apBanner" class="banner allow"><div class="big" id="apTitle">NOT RUN</div>
+    <div id="apBody">Demonstrates REQUIRE_APPROVAL and approval binding.</div></div>
+
+  <h2>Execution receipts (persisted)</h2>
+  <div style="margin-bottom:12px"><button class="btn" onclick="loadAudit()">Refresh audit trail</button>
+    <span id="auditStore" style="font-family:var(--mono);font-size:11.5px;color:var(--dim);margin-left:12px"></span></div>
+  <div style="overflow:auto"><table id="auditTable">
+    <thead><tr><th>Receipt</th><th>Decision</th><th>Agent</th><th>Capability</th><th>Resource</th>
+    <th>Origin</th><th>Task</th><th>Reason</th><th>Mode</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<!-- ============================ AUTHORIZATIONS ============================ -->
+<section class="sect" id="s-authz">
+  <h2>Authorization binding</h2>
+  <p class="sub" style="font-size:15px">Issue an authorization against any context and observe the
+  resulting object. Wildcards are refused at issuance.</p>
+  <div class="card">
+    <div class="grid g2">
+      <div>
+        <label class="kv"><span class="k">Principal</span></label>
+        <input id="fPrincipal" value="svc-research" style="width:100%;background:#060911;color:var(--text);
+          border:1px solid var(--line);border-radius:8px;padding:8px;font-family:var(--mono);font-size:12.5px;margin-bottom:9px">
+        <label class="kv"><span class="k">Agent</span></label>
+        <input id="fAgent" value="research-agent" style="width:100%;background:#060911;color:var(--text);
+          border:1px solid var(--line);border-radius:8px;padding:8px;font-family:var(--mono);font-size:12.5px;margin-bottom:9px">
+        <label class="kv"><span class="k">Capability</span></label>
+        <input id="fCap" value="customer.read" style="width:100%;background:#060911;color:var(--text);
+          border:1px solid var(--line);border-radius:8px;padding:8px;font-family:var(--mono);font-size:12.5px;margin-bottom:9px">
+      </div>
+      <div>
+        <label class="kv"><span class="k">Action</span></label>
+        <input id="fAction" value="read" style="width:100%;background:#060911;color:var(--text);
+          border:1px solid var(--line);border-radius:8px;padding:8px;font-family:var(--mono);font-size:12.5px;margin-bottom:9px">
+        <label class="kv"><span class="k">Resource</span></label>
+        <input id="fRes" value="customer/123" style="width:100%;background:#060911;color:var(--text);
+          border:1px solid var(--line);border-radius:8px;padding:8px;font-family:var(--mono);font-size:12.5px;margin-bottom:9px">
+        <label class="kv"><span class="k">Origin</span></label>
+        <input id="fOrigin" value="CRM-A" style="width:100%;background:#060911;color:var(--text);
+          border:1px solid var(--line);border-radius:8px;padding:8px;font-family:var(--mono);font-size:12.5px;margin-bottom:9px">
+        <label class="kv"><span class="k">Task</span></label>
+        <input id="fTask" value="TASK-184" style="width:100%;background:#060911;color:var(--text);
+          border:1px solid var(--line);border-radius:8px;padding:8px;font-family:var(--mono);font-size:12.5px">
+      </div>
+    </div>
+    <div class="btns"><button class="btn pri" onclick="issueFromForm()">Issue authorization</button>
+      <button class="btn" onclick="issueWildcard()">Try issuing a wildcard (must be refused)</button></div>
+  </div>
+  <div class="card" style="margin-top:16px"><h3>Issued authorization</h3>
+    <div id="issuedView" style="font-family:var(--mono);font-size:12.5px;color:var(--muted)">Not issued yet.</div></div>
+</section>
+
+<!-- ============================ POLICIES ============================ -->
+<section class="sect" id="s-policy">
+  <h2>Deterministic policy</h2>
+  <p class="sub" style="font-size:15px">The model may propose an action. It is never the authorization
+  authority. This table is data, not code — a reviewer can read the entire posture at once.</p>
+  <div style="overflow:auto"><table id="polTable"><thead><tr><th>Capability</th><th>Action</th>
+    <th>Effect</th><th>Resource scope</th><th>Origins</th><th>Rationale</th></tr></thead><tbody></tbody></table></div>
+  <div class="note"><strong>Fail-closed.</strong> An unknown capability, an unknown agent, an unknown origin,
+  a missing or expired authorization, a tampered object, or an unmatched policy all produce DENY. There is
+  no default-allow path and no silent fallback to a broader authorization.</div>
+</section>
+
+<!-- ============================ AUDIT ============================ -->
+<section class="sect" id="s-audit">
+  <h2>Audit trail</h2>
+  <p class="sub" style="font-size:15px">Every decision produces a receipt answering who, what, where,
+  why, under which authorization and under which policy version.</p>
+  <div style="margin-bottom:12px"><button class="btn" onclick="loadAudit()">Refresh</button>
+    <span id="auditStore2" style="font-family:var(--mono);font-size:11.5px;color:var(--dim);margin-left:12px"></span></div>
+  <div style="overflow:auto"><table id="auditTable2"><thead><tr><th>Receipt</th><th>Decision</th><th>Agent</th>
+    <th>Capability</th><th>Resource</th><th>Origin</th><th>Task</th><th>Reason</th><th>Mode</th>
+    <th>Integrity</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<!-- ============================ ARCHITECTURE ============================ -->
+<section class="sect" id="s-arch">
+  <h2>Architecture</h2>
+  <div class="flow">
+<span class="lbl">                      </span><span class="node">USER / AGENT</span>
+<span class="lbl">                             │</span>
+<span class="lbl">                      </span><span class="lbl">ACTION REQUEST</span>  <span class="lbl">(model proposes)</span>
+<span class="lbl">                             │</span>
+
+<span class="node">                 AGENTFENCE AUTHORIZATION BINDING</span>  <span class="af">◀ AgentFence logic</span>
+<span class="lbl">                             │</span>
+<span class="node">                      POLICY DECISION</span>  <span class="lbl">ALLOW · REQUIRE_APPROVAL · DENY</span>
+<span class="lbl">                             │</span>
+<span class="lbl">                ┌────────────┴────────────┐</span>
+<span class="lbl">          INVALID │                         │ VALID</span>
+<span class="lbl">                ▼                         ▼</span>
+<span class="node">               DENY                  EXECUTION GATE</span>  <span class="af">◀ verify bindings again</span>
+<span class="lbl">                                          │</span>
+<span class="node">                             AWS CAPABILITY</span>  <span class="aws">◀ AWS service</span>
+<span class="lbl">                                          │</span>
+<span class="node">                                  EXECUTION</span>
+<span class="lbl">                                          │</span>
+<span class="node">                            EVIDENCE RECEIPT</span>  <span class="aws">◀ persisted</span>
+  </div>
+
+  <h2 style="margin-top:34px">AWS infrastructure vs. AgentFence application logic</h2>
+  <div class="grid g2">
+    <div class="card"><h3 style="color:var(--accent2)">AWS infrastructure</h3>
+      <p>API Gateway, Lambda, DynamoDB, CloudWatch, IAM. These provide hosting, the HTTPS surface,
+      the evidence store and the execution identity.</p></div>
+    <div class="card"><h3 style="color:var(--ok)">AgentFence application logic</h3>
+      <p>Canonicalization, integrity values, the binding check, the policy table, approval binding
+      and the gate ordering. These are the product, and they are not provided by any AWS service.</p></div>
+  </div>
+
+  <h2>Why the gate ordering is the security property</h2>
+  <p class="sub" style="font-size:15px">The gate runs a fixed sequence. Bindings are verified
+  <em>before</em> policy is evaluated, so a capability substitution is reported as the true security
+  reason instead of leaking which capabilities policy forbids.</p>
+  <pre>0. request schema          → MALFORMED_REQUEST
+1. authorization present   → MISSING_AUTHORIZATION
+2. authorization integrity → INTEGRITY_MISMATCH   (tamper check FIRST)
+3. registries              → UNKNOWN_AGENT / UNKNOWN_ORIGIN
+4. validity window         → AUTHORIZATION_EXPIRED
+5. BINDING MATCH           → *_MISMATCH             ← the core invariant
+6. policy lookup           → NO_SUCH_POLICY         (no default-allow)
+7. policy effect           → POLICY_DENY / REQUIRE_APPROVAL
+8. approval (if required)  → APPROVAL_*
+9. policy scope            → UNKNOWN_RESOURCE / UNKNOWN_ORIGIN
+10. execute                → capability invoked</pre>
+
+  <h2>What this is not</h2>
+  <div class="card">
+    <p style="margin-bottom:10px"><strong>Not a prompt-injection defense.</strong> Injection can cause an
+    authorized agent to request a harmful action. AgentFence's contribution is that the request must
+    still match an authorization issued for that exact context — it does not judge whether the original
+    instruction was malicious.</p>
+    <p style="margin:0"><strong>Not a claim about MCP or A2A.</strong> MCP's authorization requirements are
+    explicit and were hardened in 2026; AgentFence addresses the execution-boundary problem, which sits
+    outside the protocol. A2A 1.0 deliberately defers in-task authorization semantics to implementations,
+    credential issuers and extensions; AgentFence is one such implementation strategy.</p>
+  </div>
+</section>
+
+</main>
+
+<footer><div class="wrap">
+  <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:14px">
+    <div>AgentFence — authorization-bound execution for AI agents. Built on AWS.</div>
+    <div>Health: <a href="/health">/health</a> · Mode: <code id="footMode">DEMO</code> · <span id="footRegion">—</span></div>
+  </div>
+</div></footer>
+
+<script>
+/* =======================================================================
+   AgentFence front-end.
+
+   DESIGN RULE: the browser NEVER decides anything. It submits a request plus
+   an authorization to the API and renders whatever the gate returns. The only
+   local computation is a pure client-side mirror used as a fallback when the
+   API is unreachable, and it is clearly labeled when active.
+   ======================================================================= */
+const API = "";              // same-origin by default
+let STATE = null;            // { authorization, policies, records, mode, ... }
+let LOCAL = false;           // true when running on the client-side fallback
+let LOCAL_RECEIPTS = [];     // client mirror of receipts for the fallback audit view
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+function go(s) {
+  document.querySelectorAll(".sect").forEach(e => e.classList.remove("on"));
+  $("s-" + s).classList.add("on");
+  document.querySelectorAll("nav a").forEach(a =>
+    a.classList.toggle("on", a.dataset.s === s));
+  if (s === "audit") loadAudit();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  location.hash = s;
+}
+document.querySelectorAll("nav a").forEach(a =>
+  a.addEventListener("click", e => { e.preventDefault(); go(a.dataset.s); }));
+
+async function api(path, opts) {
+  const r = await fetch(API + path, Object.assign({
+    headers: { "Content-Type": "application/json" }
+  }, opts || {}));
+  if (!r.ok && r.status >= 500) throw new Error("HTTP " + r.status);
+  const j = await r.json();
+  // Receipts are mirrored locally so the audit view still works if persistence is
+  // unavailable. This is bookkeeping only — it never influences a decision.
+  if (path === "/api/execute" && j && j.receipt && typeof LOCAL_RECEIPTS !== "undefined") {
+    try { LOCAL_RECEIPTS.push(j.receipt); } catch (e) {}
+  }
+  return j;
+}
+
+/* ---------- client-side fallback (pure, mirrors the gate) ----------
+   Used only when the API cannot be reached. Marked visibly in the UI.     */
+function localIssue(o) {
+  const fields = ["principal", "agent", "capability", "action", "resource", "origin", "task"];
+  const wild = fields.filter(f => !o[f] || o[f].trim() === "" ||
+    o[f] === "*" || o[f].toLowerCase() === "any");
+  if (wild.length) throw new Error("ISSUANCE_REFUSED: wildcard/empty binding: " + wild.join(", "));
+  const now = Date.now();
+  const auth = Object.assign({}, o, {
+    authorization_id: "AUTH-LOCAL",
+    issued_at: now, expires_at: now + 3600000,
+    policy_version: "customer-read-v4", constraints: {}
+  });
+  auth.integrity_value = localIntegrity(auth);
+  return auth;
+}
+function localCanonical(obj) {
+  const keys = Object.keys(obj).filter(k => k !== "integrity_value").sort();
+  return "{" + keys.map(k => JSON.stringify(k) + ":" + JSON.stringify(obj[k])).join(",") + "}";
+}
+async function localIntegrity(auth) {
+  const enc = new TextEncoder().encode(localCanonical(auth));
+  const h = await crypto.subtle.digest("SHA-256", enc);
+  return "af1:sha256:" + [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
+}
+const POLICIES = [
+  { capability: "customer.read", action: "read", effect: "ALLOW", resource_prefix: "customer/", origins: ["CRM-A"] },
+  { capability: "customer.write", action: "write", effect: "REQUIRE_APPROVAL", resource_prefix: "customer/", origins: ["CRM-A"] },
+  { capability: "customer.delete", action: "delete", effect: "DENY", resource_prefix: "customer/", origins: [] },
+  { capability: "customer.export", action: "export", effect: "REQUIRE_APPROVAL", resource_prefix: "customer/", origins: ["CRM-A"] }
+];
+const AGENTS = ["research-agent", "support-agent", "analytics-agent"];
+const ORIGINS = ["CRM-A", "CRM-B", "CRM-C"];
+const PRINCIPALS = ["svc-research", "svc-support", "svc-analytics", "human.jay"];
+const RECORDS = {
+  "customer/123": { id: "customer/123", name: "Northwind Traders", segment: "enterprise", mrr: 18400, status: "active" },
+  "customer/999": { id: "customer/999", name: "Initech Systems", segment: "smb", mrr: 2100, status: "active" }
+};
+async function localGate(req, auth, approval) {
+  const now = Date.now();
+  const out = { decision: "DENY", reason: "", detail: "", expected: {}, received: {}, receipt: {} };
+  const rc = out.receipt;
+  const bind = { principal: req.principal, agent: req.agent, capability: req.capability,
+    action: req.action, resource: req.resource, origin: req.origin, task: req.task };
+  const deny = (reason, detail, exp, got, stage) => {
+    out.reason = reason; out.detail = detail; out.expected = exp || {}; out.received = got || {};
+    out.stage = stage || "";
+    Object.assign(rc, { decision: "DENY", deny_reason: reason, agent: req.agent || "",
+      principal: req.principal || "", capability: req.capability || "", action: req.action || "",
+      resource: req.resource || "", origin: req.origin || "", task: req.task || "",
+      execution_status: "NOT_EXECUTED", mode: "DEMO", policy_version: "customer-read-v4",
+      authorization_id: (auth && auth.authorization_id) || "",
+      receipt_id: "RCPT-LOCAL", integrity_hash: "af1:sha256:local", timestamp: new Date().toISOString() });
+    return out;
+  };
+  if (!auth) return deny("MISSING_AUTHORIZATION", "No authorization was presented.", null, null, "1-authorization");
+  if (!auth.integrity_value || await localIntegrity(auth) !== auth.integrity_value)
+    return deny("INTEGRITY_MISMATCH", "Authorization integrity value does not verify. Treat as tampered.",
+      null, null, "2-integrity");
+  if (!AGENTS.includes(req.agent)) return deny("UNKNOWN_AGENT", "Unknown agent.", null, null, "3-registries");
+  if (!PRINCIPALS.includes(req.principal)) return deny("UNKNOWN_AGENT", "Unknown principal.", null, null, "3-registries");
+  if (!ORIGINS.includes(req.origin)) return deny("UNKNOWN_ORIGIN", "Unknown origin.", null, null, "3-registries");
+  if (now > auth.expires_at) return deny("AUTHORIZATION_EXPIRED", "Authorization expired before execution.",
+    null, null, "4-validity");
+  const map = { agent: "AGENT_MISMATCH", capability: "CAPABILITY_MISMATCH", action: "ACTION_MISMATCH",
+    resource: "RESOURCE_MISMATCH", origin: "ORIGIN_MISMATCH", task: "TASK_CONTEXT_MISMATCH",
+    principal: "PRINCIPAL_MISMATCH" };
+  for (const f of ["principal", "agent", "capability", "action", "resource", "origin", "task"]) {
+    if (!req[f]) return deny("MALFORMED_REQUEST", "Missing bound field '" + f + "'.", null, null, "0-schema");
+    if (auth[f] !== req[f]) {
+      const r = map[f];
+      const detail = f === "origin"
+        ? "Authorization context mismatch. Authorization is not transferable."
+        : "Authorization context mismatch.";
+      return deny(r, detail, { [f]: auth[f] }, { [f]: req[f] }, "5-bindings");
+    }
+  }
+  const rule = POLICIES.find(p => p.capability === req.capability && p.action === req.action);
+  if (!rule) return deny("NO_SUCH_POLICY", "No policy for capability '" + req.capability + "'.", null, null, "6-policy-lookup");
+  if (rule.effect === "DENY") return deny("POLICY_DENY", "Deletion is irreversible. Denied by policy.", null, null, "7-policy-effect");
+  if (rule.effect === "REQUIRE_APPROVAL") {
+    if (!approval) return deny("APPROVAL_MISSING", "Required approval was not presented.", null, null, "8-approval");
+    const bad = ["authorization_id", "action", "resource", "origin", "task"]
+      .find(f => approval[f] !== auth[f] || req[f] !== auth[f]);
+    if (bad) return deny("APPROVAL_MISMATCH", "Approval does not bind to this exact authorization.",
+      { [bad]: auth[bad] }, { [bad]: req[bad] }, "8-approval");
+  }
+  if (rule.resource_prefix && !req.resource.startsWith(rule.resource_prefix))
+    return deny("UNKNOWN_RESOURCE", "Outside declared resource scope.", null, null, "9-policy-scope");
+  if (rule.origins.length && !rule.origins.includes(req.origin))
+    return deny("UNKNOWN_ORIGIN", "Policy does not admit this origin.", null, null, "9-policy-scope");
+  out.decision = "ALLOW"; out.result = RECORDS[req.resource] || { id: req.resource, status: "updated" };
+  Object.assign(rc, { decision: "ALLOW", deny_reason: null, agent: req.agent, principal: req.principal,
+    capability: req.capability, action: req.action, resource: req.resource, origin: req.origin,
+    task: req.task, execution_status: "SUCCESS", mode: "DEMO", policy_version: "customer-read-v4",
+    authorization_id: auth.authorization_id, receipt_id: "RCPT-LOCAL",
+    integrity_hash: "af1:sha256:local", timestamp: new Date().toISOString() });
+  return out;
+}
+
+/* ---------- rendering ---------- */
+function renderAuth() {
+  const a = STATE.authorization;
+  $("aPrincipal").textContent = a.principal; $("aAgent").textContent = a.agent;
+  $("aCap").textContent = a.capability; $("aAction").textContent = a.action;
+  $("aRes").textContent = a.resource; $("aOrigin").textContent = a.origin;
+  $("aTask").textContent = a.task;
+  $("aExp").textContent = new Date(a.expires_at).toISOString().slice(11, 19) + " UTC";
+  $("aPol").textContent = a.policy_version; $("aId").textContent = a.authorization_id;
+  $("aInt").textContent = a.integrity_value;
+}
+function renderReq(req) {
+  const rows = [["Principal", req.principal], ["Agent", req.agent], ["Capability", req.capability],
+    ["Action", req.action], ["Resource", req.resource], ["Origin", req.origin], ["Task", req.task]];
+  $("reqView").innerHTML = rows.map(([k, v]) =>
+    `<div style="display:flex;justify-content:space-between;gap:10px;border-bottom:1px dashed var(--line)">
+      <span style="color:var(--dim)">${k}</span>
+      <span style="color:${k === "Resource" || k === "Origin" || k === "Task" ? "var(--warn)" : "var(--text)"}">${esc(v)}</span></div>`).join("");
+}
+function renderReceipt(rc) {
+  if (!rc) { $("rcptView").innerHTML = "No execution yet."; return; }
+  const rows = [["receipt_id", rc.receipt_id], ["authorization_id", rc.authorization_id],
+    ["agent", rc.agent], ["capability", rc.capability], ["action", rc.action],
+    ["resource", rc.resource], ["origin", rc.origin], ["task", rc.task],
+    ["policy_version", rc.policy_version], ["approval_id", rc.approval_id || "—"],
+    ["decision", rc.decision], ["execution_status", rc.execution_status],
+    ["deny_reason", rc.deny_reason || "—"], ["mode", rc.mode],
+    ["timestamp", rc.timestamp], ["integrity_hash", rc.integrity_hash]];
+  $("rcptView").innerHTML = rows.map(([k, v]) => {
+    const c = k === "decision" ? (v === "ALLOW" ? "good" : "bad")
+      : k === "execution_status" ? (v === "SUCCESS" ? "good" : "warn") : "";
+    return `<div style="display:flex;justify-content:space-between;gap:10px;border-bottom:1px dashed var(--line)">
+      <span style="color:var(--dim)">${k}</span><span class="v ${c}" style="text-align:right">${esc(v)}</span></div>`;
+  }).join("");
+}
+function setBanner(ok, title, body, exp, got) {
+  const b = $("banner");
+  b.className = "banner " + (ok ? "allow" : "denied");
+  $("bTitle").textContent = title;
+  $("bBody").innerHTML = body;
+  $("bDiff").innerHTML = (exp && got) ? `<div class="diff">
+    <div><span class="lab">Expected</span><span class="exp">${esc(exp.k)}<br>${esc(exp.v)}</span></div>
+    <div><span class="lab">Received</span><span class="got">${esc(got.k)}<br>${esc(got.v)}</span></div></div>` : "";
+}
+
+/* ---------- the six demonstrations ---------- */
+const ATTACKS = {
+  valid:     { label: "Execute valid action",  mut: r => r },
+  resource:  { label: "Change resource",      mut: r => ({ ...r, resource: "customer/999" }), f: "resource" },
+  action:    { label: "Change action",        mut: r => ({ ...r, capability: "customer.delete", action: "delete" }), f: "capability" },
+  origin:    { label: "Change origin",        mut: r => ({ ...r, origin: "CRM-B" }), f: "origin" },
+  task:      { label: "Replay task",          mut: r => ({ ...r, task: "TASK-185" }), f: "task" },
+};
+
+async function run(kind) {
+  const a = STATE.authorization;
+  let req = { ...STATE.scenario };
+  let auth = { ...a };
+  let pre = null;
+
+  if (kind === "valid") {
+    setBanner(true, "EXECUTING…", "Reconstructing execution context at the boundary.", null, null);
+  } else if (kind === "expire") {
+    auth.expires_at = Date.now() - 1000;   // backdated on purpose; integrity recomputed so
+    auth.integrity_value = await localIntegrity(auth);  // EXPIRY, not tampering, is what fails
+    setBanner(false, "EXPIRED AUTHORIZATION", "Attempting execution after expiry.", null, null);
+  } else if (kind === "tamper") {
+    auth.resource = "customer/999";        // tampered WITHOUT recomputing integrity
+    setBanner(false, "TAMPERED AUTHORIZATION",
+      "The authorization object was modified after issuance. Its integrity value no longer verifies.",
+      { k: "integrity_value", v: a.integrity_value }, { k: "resource", v: "customer/999" });
+  } else {
+    const at = ATTACKS[kind];
+    req = at.mut(req);
+    const f = at.f;
+    setBanner(false, "EXECUTING…", `Applying ${at.label.toLowerCase()} to the execution context.`,
+      { k: f, v: a[f] }, { k: f, v: req[f] });
+  }
+  renderReq(req);
+
+  let out;
+  try {
+    out = await api("/api/execute", {
+      method: "POST", body: JSON.stringify({ request: req, authorization: auth, mode: STATE.mode })
+    });
+  } catch (e) {
+    out = await localGate(req, auth, null);
+    LOCAL = true; markLocal();
+  }
+  present(out, req, a);
+}
+
+function present(out, req, a) {
+  const ok = out.decision === "ALLOW";
+  renderReceipt(out.receipt);
+  if (ok) {
+    const r = out.result || {};
+    setBanner(true, "EXECUTION ALLOWED",
+      `<div>Every binding matched. The gate executed <code>${esc(req.capability)}</code> against
+       <code>${esc(req.resource)}</code>.</div>
+       ${r.name ? `<div style="margin-top:9px;color:var(--muted)">Returned record:
+       <strong style="color:var(--text)">${esc(r.name)}</strong> · ${esc(r.segment)} · $${esc(r.mrr)} MRR</div>` : ""}
+       <div style="margin-top:9px;color:var(--dim);font-size:12.5px">Authorization ${esc(a.authorization_id)}
+       + matching execution context = permitted.</div>`);
+  } else {
+    const f = Object.keys(out.received || {})[0];
+    const exp = (out.expected || {})[f], got = (out.received || {})[f];
+    const which = f ? { k: f, v: exp } : null;
+    const gotv = f ? { k: f, v: got } : null;
+    setBanner(false, "EXECUTION DENIED",
+      `<div style="color:var(--deny);font-weight:700;margin-bottom:8px">${esc(out.reason)}</div>
+       <div>${esc(out.detail || "")}</div>
+       ${out.reason === "ORIGIN_MISMATCH" ? `<div style="margin-top:9px;color:var(--dim);font-size:12.5px">
+         Authorization is not transferable. The same credential presented from a different origin is not
+         the same authorization.</div>` : ""}`, which, gotv);
+  }
+  loadAudit();
+}
+
+async function runApproval(transfer) {
+  const base = await localIssue({
+    principal: "svc-research", agent: "research-agent", capability: "customer.write",
+    action: "write", resource: "customer/123", origin: "CRM-A", task: "TASK-184"
+  });
+  let req = { principal: "svc-research", agent: "research-agent", capability: "customer.write",
+    action: "write", resource: "customer/123", origin: "CRM-A", task: "TASK-184" };
+  let approval = null;
+  try {
+    base = (await api("/api/authorize", { method: "POST", body: JSON.stringify({
+      principal: "svc-research", agent: "research-agent", capability: "customer.write",
+      action: "write", resource: "customer/123", origin: "CRM-A", task: "TASK-184" }) })).authorization;
+  } catch (e) { }
+
+  let r1;
+  try { r1 = await api("/api/execute", { method: "POST", body: JSON.stringify({ request: req, authorization: base }) }); }
+  catch (e) { r1 = await localGate(req, base, null); }
+
+  try {
+    approval = (await api("/api/approve", { method: "POST", body: JSON.stringify({ authorization: base, approver: "human.jay" }) })).approval;
+  } catch (e) {
+    approval = { approval_id: "APPR-LOCAL", authorization_id: base.authorization_id, action: "write",
+      resource: "customer/123", origin: "CRM-A", task: "TASK-184", approver: "human.jay",
+      approved_at: Date.now(), expires_at: Date.now() + 300000, decision: "APPROVED" };
+  }
+  let r2;
+  try { r2 = await api("/api/execute", { method: "POST", body: JSON.stringify({ request: req, authorization: base, approval }) }); }
+  catch (e) { r2 = await localGate(req, base, approval); }
+
+  if (!transfer) {
+    const okAll = r1.decision === "DENY" && r1.reason === "APPROVAL_MISSING" && r2.decision === "ALLOW";
+    $("apBanner").className = "banner " + (okAll ? "allow" : "denied");
+    $("apTitle").textContent = okAll ? "APPROVAL BOUND TO THIS AUTHORIZATION" : "UNEXPECTED";
+    $("apTitle").style.color = okAll ? "var(--ok)" : "var(--deny)";
+    $("apBody").innerHTML = `
+      <div style="margin-bottom:8px"><span style="color:var(--dim)">1 · without approval</span> →
+        <span style="color:var(--warn)">${esc(r1.decision)} · ${esc(r1.reason || "")}</span></div>
+      <div><span style="color:var(--dim)">2 · human approves THIS authorization</span> →
+        <span style="color:var(--ok)">${esc(r2.decision)}</span> (approval ${esc(approval.approval_id)})</div>
+      <div style="margin-top:10px;color:var(--dim);font-size:12.5px">The approval binds action, resource,
+      origin and task. It is not a permission granted to an agent.</div>`;
+  } else {
+    const t = { ...req, task: "TASK-185" };
+    let r3;
+    try { r3 = await api("/api/execute", { method: "POST", body: JSON.stringify({ request: t, authorization: base, approval }) }); }
+    catch (e) { r3 = await localGate(t, base, approval); }
+    $("apBanner").className = "banner denied";
+    $("apTitle").textContent = r3.decision === "DENY" ? "APPROVAL REJECTED" : "UNEXPECTED ALLOW";
+    $("apTitle").style.color = "var(--deny)";
+    $("apBody").innerHTML = `<div style="color:var(--deny);font-weight:700">${esc(r3.reason)}</div>
+      <div>${esc(r3.detail || "")}</div>
+      <div style="margin-top:10px;color:var(--dim);font-size:12.5px">A valid human approval does not travel
+      with a different task. Task ${esc(req.task)} → ${esc(t.task)}: DENIED.</div>`;
+  }
+}
+
+/* ---------- authorizations / policies / audit ---------- */
+async function issueFromForm() {
+  const body = { principal: $("fPrincipal").value, agent: $("fAgent").value, capability: $("fCap").value,
+    action: $("fAction").value, resource: $("fRes").value, origin: $("fOrigin").value, task: $("fTask").value };
+  let a;
+  try { a = (await api("/api/authorize", { method: "POST", body: JSON.stringify(body) })).authorization; }
+  catch (e) { try { a = localIssue(body); } catch (err) { $("issuedView").innerHTML =
+      `<span style="color:var(--deny)">ISSUANCE REFUSED — ${esc(err.message)}</span>`; return; } }
+  $("issuedView").innerHTML = Object.entries(a).map(([k, v]) =>
+    `<div style="display:flex;justify-content:space-between;gap:10px;border-bottom:1px dashed var(--line)">
+      <span style="color:var(--dim)">${k}</span><span style="text-align:right">${esc(typeof v === "object" ? JSON.stringify(v) : v)}</span></div>`).join("");
+}
+async function issueWildcard() {
+  const body = { principal: "svc-research", agent: "research-agent", capability: "customer.read",
+    action: "read", resource: "customer/123", origin: "*", task: "TASK-184" };
+  try {
+    await api("/api/authorize", { method: "POST", body: JSON.stringify(body) });
+    $("issuedView").innerHTML = `<span style="color:var(--warn)">Unexpected: wildcard was accepted.</span>`;
+  } catch (e) {
+    let d = "refused";
+    try { const j = await api("/api/authorize", { method: "POST", body: JSON.stringify(body) }); d = JSON.stringify(j); } catch (e2) { }
+    $("issuedView").innerHTML = `<span style="color:var(--ok);font-weight:700">ISSUANCE REFUSED</span>
+      <div style="margin-top:8px;color:var(--muted)">An authorization bound to origin <code>*</code> would be
+      transferable to any origin, which is exactly what AgentFence exists to prevent. Wildcards are refused at issuance.</div>`;
+  }
+}
+function renderPolicies() {
+  const ps = STATE.policies || [];
+  $("polTable").querySelector("tbody").innerHTML = ps.map(p => {
+    const cls = p.effect === "ALLOW" ? "allow" : p.effect === "DENY" ? "deny" : "req";
+    return `<tr><td class="mono">${esc(p.capability)}</td><td class="mono">${esc(p.action)}</td>
+      <td><span class="pill ${cls}">${esc(p.effect)}</span></td><td class="mono">${esc(p.resource_prefix || "any")}</td>
+      <td class="mono">${esc((p.origins || []).join(", ") || "—")}</td><td style="color:var(--muted)">${esc(p.rationale)}</td></tr>`;
+  }).join("");
+}
+async function loadAudit() {
+  let items = [], store = "INLINE_ONLY";
+  try { const r = await api("/api/audit"); items = r.items || []; store = r.store || store; }
+  catch (e) { items = LOCAL_RECEIPTS.slice(-25).reverse(); store = "BROWSER (API unreachable)"; }
+  const rows = items.length ? items : [];
+  const html = rows.length ? rows.map(i => `<tr>
+    <td class="mono">${esc(i.receipt_id)}</td>
+    <td><span class="pill ${i.decision === "ALLOW" ? "allow" : "deny"}">${esc(i.decision)}</span></td>
+    <td class="mono">${esc(i.agent)}</td><td class="mono">${esc(i.capability)}</td>
+    <td class="mono">${esc(i.resource)}</td><td class="mono">${esc(i.origin)}</td>
+    <td class="mono">${esc(i.task)}</td><td class="mono" style="color:var(--deny)">${esc(i.deny_reason || "—")}</td>
+    <td class="mono">${esc(i.mode)}</td>
+    ${i.integrity_hash ? `<td class="mono" style="font-size:11px">${esc(i.integrity_hash)}</td>` : ""}</tr>`).join("")
+    : `<tr><td colspan="10" style="color:var(--dim)">No receipts yet — run an execution above.</td></tr>`;
+  const fill = (id, withInt) => {
+    const tb = $(id).querySelector("tbody");
+    tb.innerHTML = html.replace(/<\/tr>$/, withInt ? "</tr>" : "</tr>");
+  };
+  fill("auditTable", false); fill("auditTable2", true);
+  if ($("auditStore")) $("auditStore").textContent = "store: " + store;
+  if ($("auditStore2")) $("auditStore2").textContent = "store: " + store;
+}
+function markLocal() {
+  $("modeBadge").textContent = "MODE: DEMO (browser fallback)";
+  $("modeBadge").style.color = "var(--warn)";
+}
+function track(r) { if (r && r.receipt) LOCAL_RECEIPTS.push(r.receipt); }
+
+/* ---------- boot ---------- */
+(async function boot() {
+  try {
+    const h = await api("/health");
+    $("footRegion").textContent = (h.region || "").toUpperCase();
+    STATE = await api("/api/state");
+    STATE.mode = h.mode || "DEMO";
+    $("modeBadge").textContent = "MODE: " + STATE.mode;
+    $("footMode").textContent = STATE.mode;
+  } catch (e) {
+    STATE = { authorization: {}, scenario: {}, policies: POLICIES, mode: "DEMO" };
+    LOCAL = true; markLocal();
+    const a = localIssue({ principal: "svc-research", agent: "research-agent", capability: "customer.read",
+      action: "read", resource: "customer/123", origin: "CRM-A", task: "TASK-184" });
+    a.authorization_id = "AUTH-8F31C4D92A";
+    STATE.authorization = a;
+    STATE.scenario = { principal: "svc-research", agent: "research-agent", capability: "customer.read",
+      action: "read", resource: "customer/123", origin: "CRM-A", task: "TASK-184" };
+    $("footRegion").textContent = "LOCAL";
+  }
+  renderAuth(); renderReq(STATE.scenario); renderPolicies();
+  const or = window.run;
+  go((location.hash || "#demo").slice(1) || "demo");
+})();
+</script>
+</body>
+</html>
