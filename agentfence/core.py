@@ -23,7 +23,13 @@ The reason for shipping hashing rather than signing is deployment reliability: t
 integrity algorithm is a single, dependency-free function that behaves identically in
 tests, in the Lambda runtime, and in the browser demo. Swapping it for a signer is a
 localized change (one function) and is called out in ARCHITECTURE.md.
+
+Copyright 2026 AgentFence contributors
+
+Licensed under the Apache License, Version 2.0.
+See LICENSE for details.
 """
+
 
 from __future__ import annotations
 

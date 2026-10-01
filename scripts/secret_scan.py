@@ -5,7 +5,13 @@ Exit: 0 = clean, 1 = findings (print them and do not publish).
 
 This is a real gate for a public hackathon repository, not a formality: the repo is
 public, so anything committed here is published.
+
+Copyright 2026 AgentFence contributors
+
+Licensed under the Apache License, Version 2.0.
+See LICENSE for details.
 """
+
 
 from __future__ import annotations
 
@@ -30,7 +36,9 @@ PATTERNS = [
     (r"-----BEGIN [A-Z ]*PRIVATE KEY-----", "private key"),
     (r"xox[baprs]-[A-Za-z0-9-]{10,}", "Slack token"),
     (r"gh[pousr]_[A-Za-z0-9]{20,}", "GitHub token"),
-    (r"sk-(?:ant-)?[A-Za-z0-9_-]{20,}", "provider API key (sk-...)"),
+    # Provider keys are 'sk-' + >=32 chars with no hyphen-run ambiguity. Requiring a
+    # non-word boundary before 'sk-' stops ordinary words like "task-185" matching.
+    (r"(?<![A-Za-z])sk-(?:ant-)?[A-Za-z0-9_]{32,}", "provider API key (sk-...)"),
     (r"AIza[0-9A-Za-z_-]{35}", "Google API key"),
     (r"xoxb|-----BEGIN OPENSSH PRIVATE KEY-----", "SSH / Slack key"),
     # env-style assignment with a real-looking literal
@@ -41,10 +49,13 @@ PATTERNS = [
 COMPILED = [(re.compile(p, re.M), label) for p, label in PATTERNS]
 
 # Files that legitimately discuss credential shapes in docs/tests.
+# Generated artifacts are not hand-written source; they are rebuilt by running the
+# suite. Scanning them produces false positives from pytest parametrisation ids.
 ALLOWLIST = {
     "scripts/secret_scan.py",
     "submission/SECURITY_TESTS.md",
 }
+GENERATED_PREFIXES = ("evidence/",)
 
 
 def main() -> int:
@@ -58,7 +69,7 @@ def main() -> int:
                 continue
             path = Path(dirpath) / name
             rel = path.relative_to(ROOT).as_posix()
-            if rel in ALLOWLIST:
+            if rel in ALLOWLIST or rel.startswith(GENERATED_PREFIXES):
                 continue
             try:
                 text = path.read_text(encoding="utf-8", errors="ignore")

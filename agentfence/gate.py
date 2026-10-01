@@ -24,7 +24,13 @@ tampered with, every downstream comparison is meaningless.
 
 Denials never fall back to a broader authorization, never self-elevate, and a denial
 is never converted into an approval because execution failed.
+
+Copyright 2026 AgentFence contributors
+
+Licensed under the Apache License, Version 2.0.
+See LICENSE for details.
 """
+
 
 from __future__ import annotations
 

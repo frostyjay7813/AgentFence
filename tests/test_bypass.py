@@ -14,7 +14,13 @@ Groups:
   G. Determinism + no-fallback invariants
 
 Run:  python -m pytest tests/ -q
+
+Copyright 2026 AgentFence contributors
+
+Licensed under the Apache License, Version 2.0.
+See LICENSE for details.
 """
+
 
 from __future__ import annotations
 

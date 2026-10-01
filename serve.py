@@ -3,7 +3,13 @@
 Serves web/index.html statically and handles /health + /api/* by calling the
 Lambda handler in-process. Lets the full demo be exercised before any AWS
 deployment, with no AWS credentials.
+
+Copyright 2026 AgentFence contributors
+
+Licensed under the Apache License, Version 2.0.
+See LICENSE for details.
 """
+
 import json, os, sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 

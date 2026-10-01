@@ -16,7 +16,13 @@ Deployment notes:
     returned inline. This is deliberate: the demo must never fail because of storage.
   * No AWS credentials are ever returned to the browser. The execution identity used
     for live AWS calls is the Lambda execution role, scoped by its IAM policy.
+
+Copyright 2026 AgentFence contributors
+
+Licensed under the Apache License, Version 2.0.
+See LICENSE for details.
 """
+
 
 from __future__ import annotations
 

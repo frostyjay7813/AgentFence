@@ -156,6 +156,24 @@ the literal response from the gate.
 
 ---
 
+## License
+
+**Apache License 2.0** — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
+
+Chosen deliberately for a security product in a commercial lane:
+
+- **Express patent grant** (§3) with patent-litigation termination — meaningful when the
+  subject matter is authorization and security, where patent risk is real.
+- **Trademark protection** (§6): you may reuse the code, but "AgentFence" stays yours.
+  Anyone can build a commercial product on this; they cannot ship under your name.
+- **Zero third-party runtime dependencies**, so redistribution carries no additional
+  attribution obligation. `NOTICE` records that explicitly.
+
+Copyright 2026 AgentFence contributors. The licence and `NOTICE` ship inside the
+deployment package, so anyone who receives `function.zip` receives the terms too.
+
+---
+
 ## Status
 
 | Item | State |

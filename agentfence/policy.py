@@ -14,7 +14,13 @@ Fail-closed posture is enforced structurally:
   * capability/action not present in the policy table  -> DENY (no default-allow)
   * policy lookup itself raises                        -> DENY (POLICY_UNAVAILABLE)
   * an unmatched policy never falls through to ALLOW
+
+Copyright 2026 AgentFence contributors
+
+Licensed under the Apache License, Version 2.0.
+See LICENSE for details.
 """
+
 
 from __future__ import annotations
 

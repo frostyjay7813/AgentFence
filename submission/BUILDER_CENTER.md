@@ -149,5 +149,18 @@ credentials live.
 
 ---
 
+## Open source
+
+**Apache License 2.0** — [`LICENSE`](../LICENSE), [`NOTICE`](../NOTICE).
+Copyright 2026 AgentFence contributors.
+
+Zero third-party runtime dependencies, so the licence and NOTICE travel with the
+deployment package and redistribution carries no additional obligations. Apache-2.0 was
+chosen for its express patent grant and because its trademark clause keeps the
+AgentFence name reserved — anyone may build commercially on this; nobody may ship it
+under our brand.
+
+---
+
 *Built with a coding agent (Hermes). Development process and verification evidence:
 [`evidence/coding-agent/`](../evidence/coding-agent/).*

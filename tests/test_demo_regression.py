@@ -9,7 +9,13 @@ Both cases here were real bugs found while verifying the live deployment artifac
 2. The approval flow needs a fresh authorization for the capability being approved;
    reusing the read authorization reports CAPABILITY_MISMATCH and hides the approval
    lesson entirely.
+
+Copyright 2026 AgentFence contributors
+
+Licensed under the Apache License, Version 2.0.
+See LICENSE for details.
 """
+
 
 import json
 

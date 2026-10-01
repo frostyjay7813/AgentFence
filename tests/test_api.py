@@ -3,7 +3,13 @@ AgentFence — API layer tests.
 
 These exercise the exact handler AWS Lambda will run, including the round-trip a
 judge performs in a browser: issue -> approve -> execute -> receipt.
+
+Copyright 2026 AgentFence contributors
+
+Licensed under the Apache License, Version 2.0.
+See LICENSE for details.
 """
+
 
 from __future__ import annotations
 
