@@ -1,0 +1,193 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AgentFence - authorization-bound execution for AI agents
+
+# AgentFence - AWS infrastructure (CloudFormation)
+#
+# Least privilege by construction:
+#   * The Lambda execution role grants EXACTLY two DynamoDB permissions, scoped to one
+#     table. No wildcard resource and no AdministratorAccess anywhere in this template.
+#   * No credentials are ever exposed to the browser; the browser calls the API only.
+#   * The demo runs in DEMO mode; the capability layer is a deterministic in-process
+#     function, so the service cannot mutate a real customer resource by accident.
+#
+# AWS services used, each justified:
+#   Lambda      - hosts the deterministic gate; zero third-party runtime dependencies
+#   API Gateway - public HTTPS surface
+#   DynamoDB    - evidence store for execution receipts (TTL 90d, PITR enabled)
+#   CloudWatch  - logs
+#   IAM         - the scoped execution role
+#   S3          - static single-page demo
+#
+# NOT used, deliberately: no Bedrock/AgentCore dependency in the critical path. The thesis
+# is the authorization binding, which is AgentFence logic, not an AWS feature. The
+# AWS-vs-AgentFence split is documented in submission/ARCHITECTURE.md.
+
+Parameters:
+  Project:
+    Type: String
+    Default: agentfence
+  LogRetention:
+    Type: Number
+    Default: 14
+  FuncArn:
+    Type: String
+    Description: >
+      ARN of the Lambda function you created from the GitHub repo
+      (frostyjay7813/AgentFence, handler agentfence.api.lambda_handler).
+      Create it FIRST, then deploy this stack.
+    Default: arn:aws:lambda:us-east-1:000000000000:function:agentfence-api
+
+Resources:
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Project}-site-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: "*"
+            Action: "s3:GetObject"
+            Resource: !Sub "${SiteBucket.Arn}/*"
+
+  AuditTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "${Project}-audit"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: ts
+          AttributeType: N
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at_epoch
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  AgentFenceExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: agentfence-audit-write
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:PutItem"
+                  - "dynamodb:Scan"
+                Resource: !GetAtt AuditTable.Arn
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${Project}-*"
+
+  AgentFenceLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${Project}-api"
+      RetentionInDays: !Ref LogRetention
+
+  AgentFenceApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${Project}-api"
+      Description: AgentFence authorization-bound execution API
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  AgentFenceProxy:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AgentFenceApi
+      ParentId: !GetAtt AgentFenceApi.RootResourceId
+      PathPart: "{proxy+}"
+
+  AgentFenceAny:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AgentFenceApi
+      ResourceId: !Ref AgentFenceProxy
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FuncArn}/invocations"
+
+  AgentFenceRoot:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AgentFenceApi
+      ResourceId: !GetAtt AgentFenceApi.RootResourceId
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FuncArn}/invocations"
+
+  AgentFencePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunction"
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${AgentFenceApi}/*"
+
+  AgentFenceDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - AgentFenceAny
+      - AgentFenceRoot
+    Properties:
+      RestApiId: !Ref AgentFenceApi
+      StageName: prod
+
+Outputs:
+  ApiUrl:
+    Description: AgentFence API base URL
+    Value: !Sub "https://${AgentFenceApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+  SiteBucketName:
+    Description: Static demo bucket
+    Value: !Ref SiteBucket
+  AuditTableName:
+    Value: !Ref AuditTable

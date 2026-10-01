@@ -245,8 +245,25 @@ def _require(body, keys):
     return None
 
 
+def handle_index(_body, _headers):
+    """Serve the single-page demo from the API itself.
+
+    Serving the page from the SAME origin as the API is deliberate: it removes CORS
+    entirely, so the demo works with a single public HTTPS URL and no configuration.
+    """
+    try:
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(here, "web", "index.html"), encoding="utf-8") as fh:
+            html = fh.read()
+        return 200, html  # raw HTML; the dispatcher sends it without JSON encoding
+    except Exception as exc:
+        return 500, {"error": "PAGE_UNAVAILABLE", "detail": f"{type(exc).__name__}: {exc}"}
+
+
 ROUTES = {
     "GET /health": handle_health,
+    "GET /": handle_index,
+    "GET /index.html": handle_index,
     "GET /api/state": handle_state,
     "POST /api/authorize": handle_authorize,
     "POST /api/approve": handle_approve,
@@ -280,6 +297,14 @@ def lambda_handler(event, context):
         status, payload = fn(body, headers)
     except Exception as exc:  # never leak a stack trace to the client
         return _json(500, {"error": "INTERNAL", "detail": f"{type(exc).__name__}: {exc}"})
+    # Every handler returns (status, payload). The index handler is the one case
+    # where the payload is raw HTML rather than a JSON-serialisable object.
+    if isinstance(payload, str):
+        return {
+            "statusCode": status,
+            "headers": {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+            "body": payload,
+        }
     return _json(status, payload)
 
 
