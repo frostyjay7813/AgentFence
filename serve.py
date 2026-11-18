@@ -35,7 +35,8 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
         if path.startswith("/api") or path == "/health":
-            ev = {"httpMethod": "GET", "path": path, "body": None}
+            ev = {"httpMethod": "GET", "path": path, "body": None,
+                  "headers": dict(self.headers)}
             r = lambda_handler(ev, None)
             return self._send(r["statusCode"], r["body"])
         if path in ("/", "/index.html", "/demo", "/home"):
@@ -47,7 +48,11 @@ class H(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         n = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(n).decode() if n else ""
-        ev = {"httpMethod": "POST", "path": path, "body": body}
+        # Forward the request headers: the issuance and approval boundary derives the
+        # caller identity from the credential presented here, exactly as API Gateway
+        # passes headers to the Lambda handler in the deployed service.
+        ev = {"httpMethod": "POST", "path": path, "body": body,
+              "headers": dict(self.headers)}
         r = lambda_handler(ev, None)
         self._send(r["statusCode"], r["body"])
 

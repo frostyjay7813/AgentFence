@@ -148,6 +148,13 @@ Resources:
       RestApiId: !Ref AgentFenceApi
       ResourceId: !Ref AgentFenceProxy
       HttpMethod: ANY
+      # NOTE (authorization boundary): the gateway still declares NONE, so it applies no
+      # identity check. The APPLICATION boundary now does: /api/authorize, /api/state,
+      # /api/expire and /api/approve require a signed credential verified against
+      # AGENTFENCE_AUTH_SECRET, and reject AuthorizationType NONE explicitly
+      # (agentfence/auth.py, agentfence/api.py). A gateway-level Lambda authorizer is the
+      # defence-in-depth follow-up; it is deliberately not added here because it cannot
+      # be verified without provisioning infrastructure.
       AuthorizationType: NONE
       Integration:
         Type: AWS_PROXY

@@ -71,16 +71,51 @@ capability swap reports `CAPABILITY_MISMATCH`, not a generic policy denial.
 
 | # | Stage | Fail-closed behaviour |
 |---|---|---|
+| 0 | Preflight | receipt sealing key absent → deny (**no unkeyed receipt**) |
 | 0 | Schema | malformed request → deny |
 | 1 | Authorization present | missing auth → deny |
 | 2 | **Integrity** | SHA-256 mismatch → deny |
-| 3 | Registries | unknown principal/agent/capability/origin → deny (**no default allow**) |
-| 4 | Validity window | expired or not-yet-valid → deny |
-| 5 | **Policy lookup** | no rule → deny (**no default allow**) |
-| 6 | **Bindings** | any of the 5 fields differs → deny |
+| 3 | Registries | unknown principal/agent/origin → deny (**no default allow**) |
+| 4 | Validity window | expired or not-yet-valid → deny (clock skew may only shorten it) |
+| 5 | **Bindings** | any bound field differs → deny |
+| 6 | **Policy lookup** | no rule → deny (**no default allow**) |
 | 7 | Policy effect | DENY / REQUIRE_APPROVAL → not executed |
-| 8 | Approval | missing/unmatched approval → deny |
-| 9 | Execute | only reachable if 0–8 all passed |
+| 8 | Approval | missing/unmatched approval → deny; **requester may not approve** |
+| 9 | Policy scope | resource prefix / origin outside the rule → deny |
+| 10 | Capability present | no implementation → deny |
+| 11 | **Single use** | already consumed, or store unavailable → deny |
+| 12 | Execute | receipt sealed **and persisted** before the effect; only then is the capability invoked |
+
+The last three rows are the authorization-boundary hardening (see below). Every earlier
+stage is still present and still required; the added stages can only deny.
+
+### Authorization boundary
+
+The gate decides correctly, but a gate is only as meaningful as the authority presented
+to it. Four boundary controls were added, each with fail-closed behaviour:
+
+| Control | Behaviour |
+|---|---|
+| **Authenticated issuance** | `/api/authorize`, `/api/state`, `/api/expire` and `/api/approve` require a signed credential (`AGENTFENCE_AUTH_SECRET`). The principal is taken from the verified credential — a `principal` in the body is only ever compared, never trusted. Unauthenticated → `401` with no authorization object. `AuthorizationType: NONE` is rejected explicitly. |
+| **Separation of duties** | The principal that requested an action cannot approve it. Compared on canonical identity (`SVC-Research`, `svc_research`, `svc.research@corp` are one principal), against the **authorization's** principal rather than a caller-supplied field. Denial is `REQUESTER_CANNOT_APPROVE` at the approval stage. |
+| **Single use** | An authorization is consumed atomically on first successful use; any later use is `AUTHORIZATION_ALREADY_CONSUMED`. Consumption happens only after every check passes, so a denied request does not burn its authorization. A store that cannot answer — or a production mode with no store configured — denies. |
+| **Pre-effect receipts** | The commitment receipt is sealed with an HMAC over `AGENTFENCE_RECEIPT_HMAC_KEY` and persisted **before** the capability runs. No key → deny, never an unkeyed receipt. Receipts carry `seq`/`prev_hash` and are checked by `verify_chain`. |
+
+Configuration (nothing is provisioned by default, and no secret has a default value):
+
+```bash
+export AGENTFENCE_AUTH_SECRET=...          # required to issue or approve anything
+export AGENTFENCE_RECEIPT_HMAC_KEY=...     # required; >=16 bytes, hex or raw
+export AGENTFENCE_CONSUME_TABLE=...        # optional in DEMO, REQUIRED when AGENTFENCE_MODE is production
+export AGENTFENCE_RECEIPT_TABLE=...        # optional in DEMO, REQUIRED when AGENTFENCE_MODE is production
+export AGENTFENCE_CLOCK_SKEW_MS=0          # optional; can only shorten a validity window
+```
+
+**Honest limitation:** the in-memory consume store guarantees single-use only within a
+single process. It is thread-safe but not process-safe, so N instances permit up to N
+consumptions of one authorization. DynamoDB (one conditional write) is what holds under
+concurrency; that is why a production mode with no table configured refuses to run.
+
 
 **The LLM is never the authorization authority.** It may *propose* an action. A
 deterministic pipeline decides. The browser renders the gate's response; it decides
@@ -91,8 +126,17 @@ nothing.
 Every decision — allow or deny — emits a receipt containing the receipt ID, the gate
 result with its stage, the canonical request and authorization, the recomputed integrity
 values, the approval ID, a SHA-256 evidence hash, and the exact human-readable reason.
-The receipt hash is recomputable by anyone with the receipt, so the record is
-independently checkable rather than merely asserted.
+
+Two seals, two different claims:
+
+* the **self-hash** (`integrity_hash`) is recomputable by anyone with the receipt, so
+  corruption is independently checkable;
+* the **keyed seal** (`hmac_value`, HMAC-SHA256 under `AGENTFENCE_RECEIPT_HMAC_KEY`) is
+  *not* recomputable without the server key, which is what makes a receipt evidence of
+  authorship rather than a checksum anyone could write.
+
+For an allowed action the receipt is built, sealed and persisted **before** the
+capability runs, so a crash cannot leave an effect behind with no record of it.
 
 ---
 
@@ -101,9 +145,19 @@ independently checkable rather than merely asserted.
 ```bash
 git clone https://github.com/frostyjay7813/AgentFence
 cd AgentFence
-python -m pytest tests/ -q     # 88 tests
-python serve.py                # http://127.0.0.1:8099
+python -m pytest tests/ -q     # 230 tests
+
+# Issuance and approval are authenticated, and receipts are sealed with a server key,
+# so generate both secrets locally and mint a caller credential:
+export AGENTFENCE_AUTH_SECRET="$(python -c 'import secrets;print(secrets.token_hex(32))')"
+export AGENTFENCE_RECEIPT_HMAC_KEY="$(python -c 'import secrets;print(secrets.token_hex(32))')"
+TOKEN="$(python scripts/mint_credential.py svc-research)"
+APPROVER_TOKEN="$(python scripts/mint_credential.py human.jay)"
+python serve.py                # http://127.0.0.1:8099/?token=$TOKEN&approver_token=$APPROVER_TOKEN
 ```
+
+Without a credential the API refuses issuance with `401` and the page falls back to a
+clearly-labelled client-side explanation of the gate — it authorises nothing.
 
 Then open the demo and click through the attacks. The four substitutions each produce a
 specific denial:
@@ -178,7 +232,8 @@ deployment package, so anyone who receives `function.zip` receives the terms too
 
 | Item | State |
 |---|---|
-| Policy engine + gate + receipts | Complete, 88/88 tests passing |
+| Policy engine + gate + receipts | Complete, 230/230 tests passing |
+| Authorization boundary (issuance auth, separation of duties, single use, pre-effect receipts) | Complete, on `feat/authz-boundary-hardening` |
 | Demo (single-page, single-origin) | Complete |
 | CloudFormation + packaging | Complete, template validates, zip verified from the extracted archive |
 | Live AWS URL | Pending operator console deployment (no credentials in this environment) |

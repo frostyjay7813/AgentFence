@@ -3,17 +3,35 @@ AgentFence — AWS Lambda handler (the deployed service).
 
 Routes (all JSON over HTTPS via API Gateway):
     GET  /health                 liveness + capability status
-    GET  /api/state              deterministic demo state (no credentials needed)
-    POST /api/authorize           issue an authorization bound to a context
-    POST /api/approve             bind a human approval to a specific authorization
+    GET  /api/state              deterministic demo state (AUTHENTICATED: issues an authorization)
+    POST /api/authorize           issue an authorization bound to a context (AUTHENTICATED)
+    POST /api/approve             bind a human approval to a specific authorization (AUTHENTICATED)
     POST /api/execute             THE GATE — the only path to a capability
     GET  /api/audit               recent receipts from DynamoDB (if configured)
+
+Authorization boundary (fix 1)
+------------------------------
+Every route that MINTS authority requires an authenticated caller:
+``/api/authorize``, ``/api/state`` (it returns a sealed authorization) and
+``/api/expire`` (it returns a sealed, already-expired authorization). The principal is
+taken from the verified credential and from nowhere else — a ``principal`` in the body
+is only ever compared against the credential, never trusted. ``AuthorizationType: NONE``
+is refused explicitly rather than being treated as "no authentication configured".
+
+``/api/approve`` is authenticated for the same reason (fix 2): the approver identity is
+the thing separation of duties depends on, so it must not be self-asserted either.
+
+``/api/execute`` is intentionally still uncredentialed at the transport: the gate's
+authority comes from the authorization object (which is now credential-derived and
+single-use), not from the caller's session. Nothing here interprets a gate result.
 
 Deployment notes:
   * Zero third-party runtime dependencies — stdlib + boto3 (provided by Lambda).
   * Audit persistence is OPTIONAL. If AGENTFENCE_AUDIT_TABLE is set and reachable,
     receipts are written to DynamoDB. If not, the service still runs and receipts are
     returned inline. This is deliberate: the demo must never fail because of storage.
+    Note that this is the AUDIT sink; the pre-effect receipt chain
+    (AGENTFENCE_RECEIPT_TABLE) is a separate, fail-closed concern.
   * No AWS credentials are ever returned to the browser. The execution identity used
     for live AWS calls is the Lambda execution role, scoped by its IAM policy.
 
@@ -35,13 +53,15 @@ from typing import Any
 # Lambda's runtime includes the repo root in sys.path only if packaged flat; make it explicit.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from agentfence.auth import AuthError, authenticate_caller  # noqa: E402
 from agentfence.core import (  # noqa: E402
-    Authorization, Constraints, DENY_REASONS, canonical, full_digest, integrity, issue, now_ms, short_id,
+    Authorization, Constraints, DENY_REASONS, canonical, canonical_principal, full_digest,
+    integrity, issue, now_ms, same_principal, short_id,
 )
 from agentfence.gate import DEMO_RECORDS, enforce  # noqa: E402
 from agentfence.policy import (  # noqa: E402
     Approval, KNOWN_AGENTS, KNOWN_ORIGINS, KNOWN_PRINCIPALS, POLICY_BY_KEY, POLICY_TABLE,
-    POLICY_VERSION, create_approval,
+    POLICY_VERSION, check_separation_of_duties, create_approval,
 )
 
 VERSION = "1.0.0"
@@ -161,7 +181,24 @@ def handle_health(_body, _headers):
     }
 
 
-def handle_state(_body, _headers):
+def handle_state(_body, req_headers):
+    """
+    Deterministic demo state.
+
+    This route MINTS an authorization, so it is an issuance path and is authenticated
+    for exactly the same reason as /api/authorize. Leaving it open would have kept the
+    original hole wide open behind a different URL: an anonymous caller could fetch a
+    sealed, usable authorization for the demo scenario.
+    """
+    principal, err = _authenticate(req_headers)
+    if err:
+        return err
+    if not same_principal(principal, DEMO_SCENARIO["principal"]):
+        return 403, {
+            "error": "PRINCIPAL_NOT_AUTHENTICATED",
+            "detail": "The demo state issues an authorization for the demo principal only.",
+            "authenticated_principal": principal,
+        }
     auth = build_demo_authorization()
     return 200, {
         "mode": MODE,
@@ -179,13 +216,77 @@ def handle_state(_body, _headers):
     }
 
 
-def handle_authorize(body, _headers):
-    err = _require(body, ("principal", "agent", "capability", "action", "resource", "origin", "task"))
+# ---------------------------------------------------------------------------
+# Authorization boundary helpers
+# ---------------------------------------------------------------------------
+
+# Body fields no caller may use to override the authenticated identity.
+_IDENTITY_FIELDS = ("principal", "approver", "AuthorizationType", "authorization_type")
+
+
+def _authenticate(req_headers):
+    """
+    Resolve the authenticated caller principal.
+
+    Returns ``(principal, None)`` or ``(None, (status, payload))``. The error payload
+    NEVER contains an ``authorization`` or ``approval`` key: an unauthenticated request
+    must not receive a success-shaped body even accidentally.
+    """
+    try:
+        return authenticate_caller(req_headers), None
+    except AuthError as exc:
+        return None, (exc.status, {"error": exc.code, "detail": exc.detail})
+
+
+def _declares_none_authorization_type(body) -> bool:
+    """True when the request explicitly declares AuthorizationType NONE in the body."""
+    if not isinstance(body, dict):
+        return False
+    for field in ("AuthorizationType", "authorization_type"):
+        value = body.get(field)
+        if isinstance(value, str) and value.strip().upper() in {"NONE", "NULL", "ANONYMOUS"}:
+            return True
+    return False
+
+
+def handle_authorize(body, req_headers):
+    """
+    Issue an authorization — ONLY to an authenticated caller, and always for the
+    principal the credential proves.
+
+    Before this change the endpoint was anonymous and issued for whatever principal the
+    body named, which let any caller mint its own authority and then have the gate
+    faithfully enforce it. The gate was never wrong; the boundary in front of it was
+    missing.
+    """
+    if _declares_none_authorization_type(body):
+        return 401, {
+            "error": "AUTHORIZATION_TYPE_NONE_REJECTED",
+            "detail": "AuthorizationType NONE is not accepted for issuance.",
+        }
+
+    principal, err = _authenticate(req_headers)
     if err:
-        return 400, err
+        return err
+
+    err_body = _require(body, ("agent", "capability", "action", "resource", "origin", "task"))
+    if err_body:
+        return 400, err_body
+
+    # A client-supplied principal is never used. If one is supplied it must agree with
+    # the credential; disagreeing is an explicit refusal rather than a silent override,
+    # because silent override would hide an attempt to act as someone else.
+    claimed = body.get("principal")
+    if claimed is not None and not same_principal(claimed, principal):
+        return 403, {
+            "error": "PRINCIPAL_NOT_AUTHENTICATED",
+            "detail": "The authenticated credential does not authorize this principal.",
+            "authenticated_principal": principal,
+        }
+
     try:
         auth = issue(
-            principal=body["principal"], agent=body["agent"], capability=body["capability"],
+            principal=principal, agent=body["agent"], capability=body["capability"],
             action=body["action"], resource=body["resource"], origin=body["origin"],
             task=body["task"], policy_version=POLICY_VERSION,
             ttl_ms=int(body.get("ttl_ms", 900_000)),
@@ -193,30 +294,71 @@ def handle_authorize(body, _headers):
         )
     except ValueError as exc:
         return 400, {"error": "ISSUANCE_REFUSED", "detail": str(exc)}
-    return 200, {"authorization": auth.to_dict()}
+    return 200, {"authorization": auth.to_dict(), "issued_to": principal}
 
 
-def handle_approve(body, _headers):
-    err = _require(body, ("authorization", "approver"))
+def handle_approve(body, req_headers):
+    """
+    Approve a specific authorization — as an authenticated approver, who must not be the
+    principal that requested it.
+
+    Two separate controls, deliberately redundantly:
+      * the approver identity comes from the credential (never the body), so it cannot
+        be self-asserted;
+      * the separation-of-duties rule is applied here so no approval object is minted
+        for a self-approval, AND again inside the gate's approval stage so a
+        hand-crafted approval object still fails.
+    """
+    approver, err = _authenticate(req_headers)
     if err:
-        return 400, err
+        return err
+
+    err_body = _require(body, ("authorization",))
+    if err_body:
+        return 400, err_body
+
     try:
         auth = body["authorization"]
-        auth = auth if isinstance(auth, Authorization) else Authorization.from_dict(auth)
+        auth_obj = auth if isinstance(auth, Authorization) else Authorization.from_dict(auth)
     except Exception as exc:
         return 400, {"error": "BAD_AUTHORIZATION", "detail": str(exc)}
-    ap = create_approval(auth, approver=str(body["approver"]), ttl_ms=int(body.get("ttl_ms", 300_000)))
+
+    claimed = body.get("approver")
+    if claimed is not None and not same_principal(claimed, approver):
+        return 403, {
+            "error": "APPROVER_NOT_AUTHENTICATED",
+            "detail": "The authenticated credential does not authorize this approver.",
+            "authenticated_approver": approver,
+        }
+
+    sod = check_separation_of_duties(approver, auth_obj)
+    if sod:
+        return 403, {"error": sod.reason, "detail": sod.detail}
+
+    ap = create_approval(auth_obj, approver=approver, ttl_ms=int(body.get("ttl_ms", 300_000)))
     return 200, {"approval": ap.to_dict()}
 
 
-def handle_expire(_body, _headers):
+def handle_expire(_body, req_headers):
     """Issue a correctly-sealed authorization whose validity window is already closed.
+
+    Authenticated like every other issuance path: it still hands back a sealed
+    authorization object, and an anonymous minter is the gap this branch closes.
 
     The demo must NOT mutate a live authorization to demo expiry: changing any field
     invalidates its integrity value, so expiry would be reported as tampering and the
     AUTHORIZATION_EXPIRED path would be unreachable. Issuing an already-expired,
     properly sealed authorization is both honest and the only way to show this stage.
     """
+    principal, err = _authenticate(req_headers)
+    if err:
+        return err
+    if not same_principal(principal, DEMO_SCENARIO["principal"]):
+        return 403, {
+            "error": "PRINCIPAL_NOT_AUTHENTICATED",
+            "detail": "This demo route issues for the demo principal only.",
+            "authenticated_principal": principal,
+        }
     auth = issue(
         principal="svc-research",
         agent="research-agent",
@@ -317,14 +459,19 @@ def lambda_handler(event, context):
         except Exception:
             return _json(400, {"error": "MALFORMED_JSON", "detail": "Request body is not valid JSON."})
 
-    headers = {"Content-Type": "application/json", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+    # Handlers receive the REQUEST headers: the issuance/approval boundary derives the
+    # caller identity from the credential carried here. Response headers are fixed below.
+    req_headers = event.get("headers") or {}
+    if not isinstance(req_headers, dict):
+        req_headers = {}
+
     key = f"{method} {normalized}"
     fn = ROUTES.get(key)
     if fn is None:
         known = ", ".join(sorted(ROUTES))
         return _json(404, {"error": "NOT_FOUND", "detail": f"No route {key}", "routes": known})
     try:
-        status, payload = fn(body, headers)
+        status, payload = fn(body, req_headers)
     except Exception as exc:  # never leak a stack trace to the client
         return _json(500, {"error": "INTERNAL", "detail": f"{type(exc).__name__}: {exc}"})
     # Every handler returns (status, payload). The index handler is the one case

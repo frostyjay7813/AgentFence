@@ -8,9 +8,12 @@ index.html itself. That is how the demo runs on a single origin with no CORS:
 
     agentfence/__init__.py
     agentfence/api.py        <- handler: agentfence.api.lambda_handler
+    agentfence/auth.py       <- caller credential (issuance/approval boundary)
     agentfence/core.py
     agentfence/gate.py
     agentfence/policy.py
+    agentfence/sealing.py    <- pre-effect receipt HMAC + verify_chain
+    agentfence/store.py      <- single-use store + receipt chain
     web/index.html           <- the single-page demo
 
 Usage:
@@ -80,9 +83,13 @@ def main() -> int:
             print("  ", n)
 
     # Fail loudly if the handler or the page is missing — both are required.
+    # auth.py / store.py / sealing.py are listed individually because the gate now
+    # imports them: a package without them fails at import time in Lambda, not at review
+    # time.
     names = set(zipfile.ZipFile(OUT).namelist())
     required = {"agentfence/api.py", "agentfence/core.py", "agentfence/gate.py",
-                "agentfence/policy.py", "web/index.html", "LICENSE", "NOTICE"}
+                "agentfence/policy.py", "agentfence/auth.py", "agentfence/store.py",
+                "agentfence/sealing.py", "web/index.html", "LICENSE", "NOTICE"}
     missing = required - names
     if missing:
         print(f"ERROR: package is missing {sorted(missing)}", file=sys.stderr)

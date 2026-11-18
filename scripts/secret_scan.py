@@ -42,11 +42,22 @@ PATTERNS = [
     (r"AIza[0-9A-Za-z_-]{35}", "Google API key"),
     (r"xoxb|-----BEGIN OPENSSH PRIVATE KEY-----", "SSH / Slack key"),
     # env-style assignment with a real-looking literal
-    (r"(?i)(api[_-]?key|secret|password|passwd|token)\s*[=:]\s*[\"'][^\"'\s]{12,}[\"']",
+    (r"(?i)(api[_-]?key|secret|password|passwd|token)\s*[=:]\s*[\"']([^\"'\s]{12,})[\"']",
      "hardcoded credential assignment"),
 ]
 
 COMPILED = [(re.compile(p, re.M), label) for p, label in PATTERNS]
+
+# An ENV-STYLE NAME is not a credential. ``ENV_AUTH_SECRET = "AGENTFENCE_AUTH_SECRET"``
+# declares the NAME of the variable a deployment must set; it leaks nothing. Without
+# this filter the pattern above flags every such declaration, which trains reviewers to
+# ignore the scanner — the opposite of what it is for. Values that merely look like
+# names are still caught if they do not match this shape.
+_ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def _is_env_var_name(value: str) -> bool:
+    return bool(_ENV_NAME.match(value))
 
 # Files that legitimately discuss credential shapes in docs/tests.
 # Generated artifacts are not hand-written source; they are rebuilt by running the
@@ -78,6 +89,9 @@ def main() -> int:
             scanned += 1
             for rx, label in COMPILED:
                 for m in rx.finditer(text):
+                    if label == "hardcoded credential assignment" and m.lastindex and m.lastindex >= 2:
+                        if _is_env_var_name(m.group(2)):
+                            continue
                     line = text.count("\n", 0, m.start()) + 1
                     findings.append((rel, line, label, m.group(0)[:40]))
 

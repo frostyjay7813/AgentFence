@@ -31,9 +31,11 @@ from .core import (
     Decision,
     DENY_REASONS,
     canonical,
+    canonical_principal,
     integrity,
     full_digest,
     now_ms,
+    same_principal,
     short_id,
 )
 
@@ -262,4 +264,69 @@ def check_approval(
                 expected={f: getattr(auth, f)},
                 received={f: request.get(f)},
             )
+
+    # ---- separation of duties ------------------------------------------------
+    # Placed after the binding checks on purpose: it fires only for an approval that
+    # otherwise binds correctly to this exact authorization, so a genuine binding error
+    # is still reported as APPROVAL_MISMATCH rather than being masked.
+    sod = check_separation_of_duties(approval.approver, auth, request)
+    if sod:
+        return sod
+    return None
+
+
+def check_separation_of_duties(
+    approver: str, auth, request: dict[str, Any] | None = None
+) -> Decision | None:
+    """
+    Refuse an approval by the same principal that requested the action.
+
+    Two deliberate choices, both of which are the point of this function:
+
+    1. **The requester identity is taken from the authorization, not the request.**
+       ``auth.principal`` is set from the authenticated credential at issuance and is
+       covered by the authorization's integrity value. A caller cannot dodge this check
+       by writing a different ``principal`` into the request body: the request value is
+       checked too, and stage 5 rejects any request whose principal differs from the
+       authorization's. Comparing two caller-supplied strings would have been
+       decorative.
+
+    2. **Comparison is on canonical identity, not string equality.** ``SVC-Research``,
+       ``svc_research@corp`` and ``svc research`` are one principal. Comparing with
+       ``==`` would let a self-approval through by changing a dash to an underscore,
+       which is the sort of control that looks present and is not.
+
+    An approval that carries no identifiable approver is refused here as well, because
+    a blank approver can never be shown to be distinct from the requester.
+    """
+    if canonical_principal(approver) == "":
+        return Decision(
+            "DENY",
+            "APPROVAL_MISMATCH",
+            "Approval carries no identifiable approver; separation of duties cannot be established.",
+        )
+
+    requester = getattr(auth, "principal", "") or ""
+    request_principal = (request or {}).get("principal", "") or ""
+
+    if same_principal(approver, requester):
+        return Decision(
+            "DENY",
+            "REQUESTER_CANNOT_APPROVE",
+            DENY_REASONS["REQUESTER_CANNOT_APPROVE"]
+            + f" Requester and approver are both '{canonical_principal(requester)}'.",
+            expected={"approver": "a principal distinct from the requester"},
+            received={"approver": approver, "requester": requester},
+        )
+
+    if request_principal and same_principal(approver, request_principal):
+        return Decision(
+            "DENY",
+            "REQUESTER_CANNOT_APPROVE",
+            DENY_REASONS["REQUESTER_CANNOT_APPROVE"]
+            + f" Approver matches the request principal '{canonical_principal(request_principal)}'.",
+            expected={"approver": "a principal distinct from the requester"},
+            received={"approver": approver, "requester": request_principal},
+        )
+
     return None

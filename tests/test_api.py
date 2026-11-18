@@ -14,6 +14,7 @@ See LICENSE for details.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -22,10 +23,28 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agentfence.api import lambda_handler, build_demo_authorization, DEMO_SCENARIO
+from agentfence.auth import sign_credential
 
 
-def call(method: str, path: str, body=None):
-    return lambda_handler({"httpMethod": method, "path": path, "body": json.dumps(body) if body else None}, None)
+def credential(principal: str = "svc-research") -> str:
+    """Mint a credential for a principal using the ephemeral test secret.
+
+    Issuance and approval are authenticated as of the authorization-boundary hardening,
+    so these HTTP tests present a credential exactly as a real caller must.
+    """
+    return sign_credential(principal, secret=os.environ["AGENTFENCE_AUTH_SECRET"])
+
+
+def call(method: str, path: str, body=None, principal: str = "svc-research"):
+    return lambda_handler(
+        {
+            "httpMethod": method,
+            "path": path,
+            "body": json.dumps(body) if body else None,
+            "headers": {"Authorization": f"Bearer {credential(principal)}"},
+        },
+        None,
+    )
 
 
 def payload(resp):
@@ -147,7 +166,8 @@ class TestApprovalFlow:
         assert p1["reason"] == "APPROVAL_MISSING"
         assert p1["receipt"]["approval_required"] is True
 
-        ap = payload(call("POST", "/api/approve", {"authorization": auth, "approver": "human.jay"}))["approval"]
+        ap = payload(call("POST", "/api/approve", {"authorization": auth, "approver": "human.jay"},
+                          principal="human.jay"))["approval"]
         p2 = payload(call("POST", "/api/execute", {"request": req, "authorization": auth, "approval": ap}))
         assert p2["decision"] == "ALLOW"
         assert p2["receipt"]["approval_id"] == ap["approval_id"]
@@ -158,7 +178,8 @@ class TestApprovalFlow:
             "capability": "customer.write", "action": "write",
             "resource": "customer/123", "task": "TASK-184",
         }))["authorization"]
-        ap = payload(call("POST", "/api/approve", {"authorization": auth, "approver": "human.jay"}))["approval"]
+        ap = payload(call("POST", "/api/approve", {"authorization": auth, "approver": "human.jay"},
+                          principal="human.jay"))["approval"]
         req = {**DEMO_SCENARIO, "capability": "customer.write", "action": "write", "task": "TASK-185"}
         p = payload(call("POST", "/api/execute", {"request": req, "authorization": auth, "approval": ap}))
         assert p["decision"] == "DENY"

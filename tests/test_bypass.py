@@ -502,10 +502,20 @@ class TestReceipt:
 
 
 class TestInvariants:
-    def test_gate_is_deterministic(self, auth):
+    def test_gate_is_deterministic(self):
+        """
+        The same context produces the same decision every time.
+
+        Each call below uses a FRESHLY ISSUED authorization, because authorizations are
+        now single-use (fix 3): replaying one authorization is denied with
+        AUTHORIZATION_ALREADY_CONSUMED, proved by tests/test_single_use.py. Determinism
+        is a property of the decision given equal inputs, not a licence to reuse one
+        credential twice — the previous version of this test asserted the latter, which
+        is exactly the replay hole this branch closes.
+        """
         req = base_request()
-        a = enforce(req, auth)
-        b = enforce(req, auth)
+        a = enforce(req, base_auth())
+        b = enforce(req, base_auth())
         assert a.decision == b.decision == "ALLOW"
         assert a.result == b.result
 
