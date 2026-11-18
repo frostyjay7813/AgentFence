@@ -377,10 +377,31 @@ function go(s) {
 document.querySelectorAll("nav a").forEach(a =>
   a.addEventListener("click", e => { e.preventDefault(); go(a.dataset.s); }));
 
+/* Issuance and approval are authenticated at the API. The page carries a credential
+   supplied by the operator, either as ?token=<jwt-ish> / ?approver_token=<...> or in
+   localStorage from a previous visit. There is deliberately no way for this page to
+   mint a credential: that is the hole the authorization boundary closed. */
+const QS = new URLSearchParams(location.search);
+const TOKEN = QS.get("token") || (localStorage.getItem("af_token") || "");
+const APPROVER_TOKEN = QS.get("approver_token") || (localStorage.getItem("af_approver_token") || "");
+try {
+  if (QS.get("token")) localStorage.setItem("af_token", QS.get("token"));
+  if (QS.get("approver_token")) localStorage.setItem("af_approver_token", QS.get("approver_token"));
+} catch (e) {}
+
 async function api(path, opts) {
-  const r = await fetch(API + path, Object.assign({
-    headers: { "Content-Type": "application/json" }
-  }, opts || {}));
+  const o = Object.assign({}, opts || {});
+  const bearer = o.authToken || TOKEN;
+  delete o.authToken;
+  const headers = Object.assign(
+    { "Content-Type": "application/json" },
+    bearer ? { "Authorization": "Bearer " + bearer } : {},
+    o.headers || {}
+  );
+  const r = await fetch(API + path, Object.assign({}, o, { headers }));
+  if (r.status === 401 || r.status === 403) {
+    window.AF_AUTH_ERROR = r.status;
+  }
   if (!r.ok && r.status >= 500) throw new Error("HTTP " + r.status);
   const j = await r.json();
   // Receipts are mirrored locally so the audit view still works if persistence is
@@ -637,7 +658,7 @@ async function runApproval(transfer) {
   catch (e) { r1 = await localGate(req, base, null); }
 
   try {
-    approval = (await api("/api/approve", { method: "POST", body: JSON.stringify({ authorization: base, approver: "human.jay" }) })).approval;
+    approval = (await api("/api/approve", { method: "POST", authToken: APPROVER_TOKEN, body: JSON.stringify({ authorization: base, approver: "human.jay" }) })).approval;
   } catch (e) {
     approval = { approval_id: "APPR-LOCAL", authorization_id: base.authorization_id, action: "write",
       resource: "customer/123", origin: "CRM-A", task: "TASK-184", approver: "human.jay",
@@ -755,7 +776,11 @@ function track(r) { if (r && r.receipt) LOCAL_RECEIPTS.push(r.receipt); }
     STATE.authorization = a;
     STATE.scenario = { principal: "svc-research", agent: "research-agent", capability: "customer.read",
       action: "read", resource: "customer/123", origin: "CRM-A", task: "TASK-184" };
-    $("footRegion").textContent = "LOCAL";
+    // Be explicit rather than quietly degrading: if the API refused for lack of a valid
+    // credential, say so. The browser fallback explains the gate; it authorizes nothing.
+    $("footRegion").textContent = window.AF_AUTH_ERROR
+      ? "API REQUIRES A CREDENTIAL (see README)"
+      : "LOCAL";
   }
   renderAuth(); renderReq(STATE.scenario); renderPolicies();
   const or = window.run;

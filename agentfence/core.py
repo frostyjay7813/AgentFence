@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
@@ -111,6 +112,46 @@ def _is_wildcard(value: Any) -> bool:
 
 def short_id(prefix: str, n: int = 8) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:n].upper()}"
+
+
+# Separator characters that carry no identity meaning. Two spellings of a principal
+# that differ only by these, by case, or by whitespace are the SAME principal.
+_PRINCIPAL_SEPARATORS = re.compile(r"[\s._\-:+]+")
+
+
+def canonical_principal(principal: Any) -> str:
+    """
+    Canonical identity form of a principal, used for separation-of-duties checks.
+
+    Why this exists: comparing approver to requester with ``==`` is trivially bypassed
+    by any spelling variant. ``svc-research``, ``SVC_RESEARCH``, ``Svc.Research`` and
+    ``svc-research@corp`` are one identity, and a self-approval check that treats them
+    as distinct would be a separation-of-duties hole dressed up as a control.
+
+    Normalization: strip, casefold, drop an ``@realm`` suffix, drop a ``+tag``
+    suffix (both standard mailbox aliasing vectors), then remove separator
+    characters. Empty or non-string input canonicalizes to ``""``, which callers must
+    treat as "unknown identity" and deny where an identity is required.
+    """
+    if not isinstance(principal, str):
+        return ""
+    s = principal.strip().casefold()
+    if not s:
+        return ""
+    s = s.split("@", 1)[0]
+    s = s.split("+", 1)[0]
+    return _PRINCIPAL_SEPARATORS.sub("", s)
+
+
+def same_principal(a: Any, b: Any) -> bool:
+    """
+    True when two principal strings denote the same identity.
+
+    Fails closed in the sense that matters for authorization: an empty canonical form
+    never matches anything, so missing identities cannot be treated as equal.
+    """
+    ca, cb = canonical_principal(a), canonical_principal(b)
+    return bool(ca) and ca == cb
 
 
 @dataclass
@@ -296,6 +337,28 @@ DENY_REASONS = {
     "POLICY_UNAVAILABLE": "Policy could not be evaluated. Failing closed.",
     "NO_SUCH_POLICY": "No policy matches this capability/action pair.",
     "TRANSFER_ATTEMPT": "Authorization transfer was attempted but not authorized.",
+    # --- authorization-boundary hardening (feat/authz-boundary-hardening) ---
+    "REQUESTER_CANNOT_APPROVE": (
+        "The principal that requested this action cannot also approve it. "
+        "Separation of duties is required."
+    ),
+    "AUTHORIZATION_ALREADY_CONSUMED": (
+        "Authorization has already been consumed by a prior successful use. "
+        "Authorizations are single-use."
+    ),
+    "AUTHORIZATION_ID_MISSING": (
+        "Authorization carries no identifier and therefore cannot be consumed."
+    ),
+    "CONSUME_STORE_UNAVAILABLE": (
+        "The single-use consumption store is unavailable or unconfigured. "
+        "Failing closed rather than allowing replay."
+    ),
+    "RECEIPT_KEY_UNAVAILABLE": (
+        "The receipt sealing key is not configured. Refusing to emit an unkeyed receipt."
+    ),
+    "RECEIPT_PERSIST_FAILED": (
+        "The sealed receipt could not be persisted before the effect. Failing closed."
+    ),
 }
 
 
@@ -373,10 +436,24 @@ def check_bindings(auth: Authorization, request: dict[str, Any]) -> Decision | N
     return None
 
 
-def check_validity(auth: Authorization, at_ms: int | None = None) -> Decision | None:
+def check_validity(auth: Authorization, at_ms: int | None = None, skew_ms: int = 0) -> Decision | None:
+    """
+    Validity window check.
+
+    ``skew_ms`` exists because the issuer's clock and the gate's clock are different
+    clocks and will disagree. It is applied in the ONLY direction that is safe: the
+    authorization is treated as expired ``skew_ms`` *earlier* than its stamped
+    ``expires_at``. Clock skew can therefore shorten an authorization's life but can
+    never extend it, so enabling skew is never a way to widen the window.
+
+    ``skew_ms`` defaults to 0, which reproduces the original behaviour exactly
+    (``t > expires_at`` is expired) and is what the rest of the suite asserts.
+    Negative values are clamped to 0 rather than silently extending validity.
+    """
     t = now_ms() if at_ms is None else at_ms
+    skew = max(0, int(skew_ms or 0))
     if t < auth.issued_at:
         return Decision("DENY", "AUTHORIZATION_NOT_YET_VALID", DENY_REASONS["AUTHORIZATION_NOT_YET_VALID"])
-    if t > auth.expires_at:
+    if t > auth.expires_at - skew:
         return Decision("DENY", "AUTHORIZATION_EXPIRED", DENY_REASONS["AUTHORIZATION_EXPIRED"])
     return None

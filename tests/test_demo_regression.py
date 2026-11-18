@@ -18,8 +18,10 @@ See LICENSE for details.
 
 
 import json
+import os
 
 from agentfence.api import lambda_handler
+from agentfence.auth import sign_credential
 
 
 def read_request():
@@ -34,9 +36,13 @@ def write_request():
     return dict(read_request(), capability="customer.write", action="write")
 
 
-def call(path, body=None):
+def call(path, body=None, principal="svc-research"):
+    # Issuance and approval are authenticated as of the authorization-boundary
+    # hardening; every call here presents a credential, as a real caller must.
+    token = sign_credential(principal, secret=os.environ["AGENTFENCE_AUTH_SECRET"])
     event = {"httpMethod": "POST" if body is not None else "GET", "path": path,
-             "body": json.dumps(body) if body is not None else None}
+             "body": json.dumps(body) if body is not None else None,
+             "headers": {"Authorization": f"Bearer {token}"}}
     return json.loads(lambda_handler(event, None)["body"])
 
 
@@ -72,14 +78,16 @@ class TestApprovalFlowIsReachable:
 
     def test_approval_allows_and_is_recorded(self):
         auth = call("/api/authorize", write_request())["authorization"]
-        approval = call("/api/approve", {"authorization": auth, "approver": "human.jay"})["approval"]
+        approval = call("/api/approve", {"authorization": auth, "approver": "human.jay"},
+                         principal="human.jay")["approval"]
         res = call("/api/execute", {"request": write_request(), "authorization": auth, "approval": approval})
         assert res["decision"] == "ALLOW"
         assert res["receipt"]["approval_id"] == approval["approval_id"]
 
     def test_approval_does_not_transfer_to_another_task(self):
         auth = call("/api/authorize", write_request())["authorization"]
-        approval = call("/api/approve", {"authorization": auth, "approver": "human.jay"})["approval"]
+        approval = call("/api/approve", {"authorization": auth, "approver": "human.jay"},
+                         principal="human.jay")["approval"]
         moved = dict(write_request(), task="TASK-185")
         res = call("/api/execute", {"request": moved, "authorization": auth, "approval": approval})
         assert res["decision"] == "DENY"
