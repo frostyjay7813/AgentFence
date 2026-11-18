@@ -35,6 +35,10 @@ fddab17  2026-10-01 17:32  AWS deployment: CloudFormation stack, Lambda packagin
 
 **96/96 tests pass.** The agent wrote, ran, and debugged them.
 
+> Later addition: `tests/test_registry.py` (64 tests, 2026-11-18) extends the suite to
+> **160/160 passing**. See `evidence/pytest_agent_registry_branch.log`. The table above
+> describes the original build and its line counts at that time.
+
 ---
 
 ## 2. Agent actions against the real environment
@@ -114,7 +118,7 @@ before submitting.
 
 ```bash
 git clone https://github.com/frostyjay7813/AgentFence && cd AgentFence
-python -m pytest tests/ -q        # 96 passed
+python -m pytest tests/ -q        # 160 passed
 python scripts/package.py         # rebuild function.zip
 python scripts/secret_scan.py     # PASS: 0 credential patterns
 ```

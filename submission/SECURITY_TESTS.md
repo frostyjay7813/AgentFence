@@ -6,8 +6,13 @@ All results below are **observed output**, not design intent. Raw logs:
 
 ```
 $ python -m pytest tests/ -q
-96 passed in 0.51s
+160 passed in 0.51s
 ```
+
+`evidence/pytest_full.log` is the original 96-test capture (Windows, pytest 9.1.1).
+`evidence/pytest_agent_registry_branch.log` is the 160-test capture for the
+`feat/agent-registry` branch (Linux, pytest 9.2.0) and adds the 64 registry tests.
+Both are unedited tool output; neither replaces the other.
 
 The runtime evidence was captured from the **extracted `function.zip`** — the same
 artifact uploaded to Lambda — executed in a clean subprocess, not from the dev tree.
@@ -179,7 +184,7 @@ Recorded because the fixes changed observed behaviour:
 
 ```bash
 git clone https://github.com/frostyjay7813/AgentFence && cd AgentFence
-python -m pytest tests/ -q                  # 96 passed
+python -m pytest tests/ -q                  # 160 passed
 python scripts/package.py                   # rebuild function.zip
 python evidence/probe_runtime.py <extracted_zip_dir>   # reproduces the table in §1
 ```
