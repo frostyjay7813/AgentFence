@@ -109,8 +109,23 @@ def _is_wildcard(value: Any) -> bool:
     return v in WILDCARD_TOKENS or "*" in v or v.lower() in {"any", "all"}
 
 
+def is_wildcard(value: Any) -> bool:
+    """Public form of :func:`_is_wildcard`.
+
+    The agent registry must refuse a wildcard grant at registration time using exactly
+    the rule ``issue()`` applies at issuance time; two different notions of "wildcard"
+    between the two would be a hole.
+    """
+    return _is_wildcard(value)
+
+
 def short_id(prefix: str, n: int = 8) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:n].upper()}"
+
+
+def iso_ms(ms: int) -> str:
+    """Render epoch milliseconds as a stable ISO-8601 UTC timestamp."""
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(ms / 1000)) + f".{ms % 1000:03d}Z"
 
 
 @dataclass
@@ -274,8 +289,11 @@ DENY_REASONS = {
     "MISSING_AUTHORIZATION": "No authorization was presented.",
     "MALFORMED_REQUEST": "Request could not be parsed or failed schema validation.",
     "UNKNOWN_AGENT": "Agent is not registered.",
+    "AGENT_NOT_ACTIVE": "Agent is registered but not in an active lifecycle state.",
     "UNKNOWN_CAPABILITY": "Capability is not recognized.",
     "UNKNOWN_ORIGIN": "Origin is not a registered execution boundary.",
+    "CAPABILITY_NOT_GRANTED": "Agent is not granted this capability in the registry.",
+    "ORIGIN_NOT_GRANTED": "Agent is not permitted to act through this origin.",
     "UNKNOWN_RESOURCE": "Resource does not exist or is not addressable.",
     "UNKNOWN_ACTION": "Action is not recognized.",
     "AGENT_MISMATCH": "Agent does not match the authorization.",

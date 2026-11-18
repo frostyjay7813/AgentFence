@@ -108,7 +108,8 @@ marketing value.
 ## Verification
 
 ```
-96/96 tests passing        bypass, fail-closed, integrity, approval, receipts, HTTP
+160/160 tests passing      bypass, fail-closed, integrity, approval, receipts, HTTP,
+                           agent registry (identity, lifecycle, sealed mutation chain)
 0 credential patterns      scripts/secret_scan.py on the public repo
 Live artifact tested       executed from the extracted function.zip, not the dev tree
 ```

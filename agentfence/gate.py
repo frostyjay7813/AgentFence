@@ -10,13 +10,13 @@ ORDER MATTERS and is asserted by the test suite:
   0. request schema          -> MALFORMED_REQUEST
   1. authorization present   -> MISSING_AUTHORIZATION
   2. authorization integrity -> INTEGRITY_MISMATCH          (tamper detection FIRST)
-  3. registries              -> UNKNOWN_AGENT/ORIGIN/RESOURCE
+  3. registries              -> UNKNOWN_AGENT / AGENT_NOT_ACTIVE / UNKNOWN_ORIGIN
   4. validity window         -> AUTHORIZATION_EXPIRED
-  5. policy lookup           -> NO_SUCH_POLICY              (no default-allow)
-  6. policy effect           -> POLICY_DENY / REQUIRE_APPROVAL
-  7. binding match           -> *_MISMATCH                  (the core invariant)
+  5. binding match           -> *_MISMATCH                  (the core invariant)
+  6. policy lookup           -> NO_SUCH_POLICY              (no default-allow)
+  7. policy effect           -> POLICY_DENY / REQUIRE_APPROVAL
   8. approval (if required)  -> APPROVAL_*
-  9. policy scope            -> UNKNOWN_RESOURCE / ORIGIN
+  9. policy scope + grant    -> UNKNOWN_RESOURCE / *_NOT_GRANTED
  10. execute                 -> capability invoked
 
 Integrity is verified BEFORE binding comparison on purpose: if the authorization was
@@ -57,11 +57,9 @@ from .policy import (
     check_approval,
     check_policy,
     evaluate_policy,
-    KNOWN_AGENTS,
-    KNOWN_ORIGINS,
-    KNOWN_PRINCIPALS,
     POLICY_VERSION,
 )
+from .registry import default_registry
 
 REQUIRED_REQUEST_FIELDS = (
     "principal",
@@ -153,6 +151,8 @@ class Receipt:
     elapsed_ms: float
     result_summary: str
     authorization_integrity: str
+    registry_version: int = 0
+    registry_digest: str = ""
     integrity_hash: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -216,6 +216,12 @@ def enforce(
     t0 = time.perf_counter()
     ms = now_ms()
 
+    # Resolve the registry once, so the receipt records exactly which registry
+    # configuration produced this decision.
+    registry = default_registry()
+    registry_version = registry.version
+    registry_digest = registry.state_digest()
+
     def finish(
         decision: str,
         stage: str,
@@ -268,6 +274,8 @@ def enforce(
             elapsed_ms=round((time.perf_counter() - t0) * 1000, 3),
             result_summary=summary or reason or detail,
             authorization_integrity=(auth_obj.integrity_value if auth_obj else ""),
+            registry_version=registry_version,
+            registry_digest=registry_digest,
         )
         gr.receipt.compute_integrity()
         return gr
@@ -302,12 +310,26 @@ def enforce(
     if d:
         return finish("DENY", "2-integrity", d.reason, d.detail)
 
-    # ---- 3. registries ------------------------------------------------------
-    if request["agent"] not in KNOWN_AGENTS:
+    # ---- 3. identity registries (agent -> principal -> origin) --------------
+    # Order and reason strings are unchanged from the static-tuple implementation on
+    # purpose: this is a data-source swap, not a change to the decision surface.
+    record = registry.get(request["agent"])
+    if record is None:
         return finish("DENY", "3-registries", "UNKNOWN_AGENT", f"Unknown agent '{request['agent']}'.")
-    if request["principal"] not in KNOWN_PRINCIPALS:
+    if not record.active:
+        # Registered but withdrawn: still a denial. Suspension and revocation must never
+        # degrade into "not found" or, worse, into an allow.
+        return finish(
+            "DENY",
+            "3-registries",
+            "AGENT_NOT_ACTIVE",
+            f"Agent '{request['agent']}' is {record.lifecycle_state}, not active.",
+            expected={"lifecycle_state": "active"},
+            received={"lifecycle_state": record.lifecycle_state},
+        )
+    if request["principal"] not in registry.principals():
         return finish("DENY", "3-registries", "MISSING_AUTHORIZATION", f"Unknown principal '{request['principal']}'.")
-    if request["origin"] not in KNOWN_ORIGINS:
+    if request["origin"] not in registry.origins():
         return finish("DENY", "3-registries", "UNKNOWN_ORIGIN", f"Unknown origin '{request['origin']}'.")
 
     # ---- 4. validity window -------------------------------------------------
@@ -354,7 +376,29 @@ def enforce(
                 policy_effect=rule.effect, approval_required=True,
             )
 
-    # ---- 9. policy scope ----------------------------------------------------
+    # ---- 9. policy scope + registry grant -----------------------------------
+    # Two independent scopes must both admit the request:
+    #   * the policy rule's own resource prefix / origin list (unchanged)
+    #   * the agent's registry grants (new): least privilege per agent
+    # The registry check can only ever NARROW what policy allows. It runs after the
+    # policy effect so that a capability the policy denies outright is still reported
+    # as POLICY_DENY rather than as a grant problem.
+    if not record.grants(request["capability"]):
+        return finish(
+            "DENY", "9-policy-scope", "CAPABILITY_NOT_GRANTED",
+            f"Agent '{request['agent']}' is not granted capability '{request['capability']}'.",
+            expected={"capabilities": list(record.capabilities)},
+            received={"capability": request["capability"]},
+            policy_effect=rule.effect, approval_required=approval_required,
+        )
+    if not record.admits_origin(request["origin"]):
+        return finish(
+            "DENY", "9-policy-scope", "ORIGIN_NOT_GRANTED",
+            f"Agent '{request['agent']}' may not act through origin '{request['origin']}'.",
+            expected={"allowed_origins": list(record.allowed_origins)},
+            received={"origin": request["origin"]},
+            policy_effect=rule.effect, approval_required=approval_required,
+        )
     d = check_policy(rule, request)
     if d:
         return finish(
