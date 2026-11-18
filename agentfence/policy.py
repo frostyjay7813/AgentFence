@@ -94,10 +94,17 @@ POLICY_BY_KEY: dict[tuple[str, str], PolicyRule] = {
     (r.capability, r.action): r for r in POLICY_TABLE
 }
 
-# Registries. Unknown values are a hard DENY, never a permissive fallback.
-KNOWN_AGENTS = ("research-agent", "support-agent", "analytics-agent")
-KNOWN_ORIGINS = ("CRM-A", "CRM-B", "CRM-C")
-KNOWN_PRINCIPALS = ("svc-research", "svc-support", "svc-analytics", "human.jay")
+# Identity data used to live here as three flat tuples:
+#
+#     KNOWN_AGENTS, KNOWN_ORIGINS, KNOWN_PRINCIPALS
+#
+# They have been replaced by agentfence.registry.AgentRegistry, which models ownership,
+# per-agent capability and origin grants, lifecycle state and created/rotated/revoked
+# timestamps, and journals every mutation into the receipt chain.
+#
+# This module remains the EFFECT authority and nothing else: given a capability the
+# registry has granted to an agent, POLICY_TABLE decides ALLOW / REQUIRE_APPROVAL /
+# DENY. The registry never decides an effect, and policy never decides an identity.
 
 
 def evaluate_policy(capability: str, action: str) -> tuple[PolicyRule | None, Decision | None]:

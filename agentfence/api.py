@@ -40,9 +40,9 @@ from agentfence.core import (  # noqa: E402
 )
 from agentfence.gate import DEMO_RECORDS, enforce  # noqa: E402
 from agentfence.policy import (  # noqa: E402
-    Approval, KNOWN_AGENTS, KNOWN_ORIGINS, KNOWN_PRINCIPALS, POLICY_BY_KEY, POLICY_TABLE,
-    POLICY_VERSION, create_approval,
+    Approval, POLICY_BY_KEY, POLICY_TABLE, POLICY_VERSION, create_approval,
 )
+from agentfence.registry import default_registry  # noqa: E402
 
 VERSION = "1.0.0"
 BUILD = "agentfence-lambda"
@@ -140,6 +140,10 @@ def build_demo_authorization() -> Authorization:
 def handle_health(_body, _headers):
     table_name = os.environ.get("AGENTFENCE_AUDIT_TABLE")
     audit_ok = "CONFIGURED" if table_name else "INLINE_ONLY"
+    reg = default_registry()
+    chain_ok, chain_detail = reg.verify_chain()
+    records_ok, records_detail = reg.verify_records()
+    records = reg.records()
     return 200, {
         "status": "ok",
         "service": "agentfence",
@@ -150,10 +154,22 @@ def handle_health(_body, _headers):
         "policy_version": POLICY_VERSION,
         "capability": {
             "policy_rules": len(POLICY_TABLE),
-            "known_agents": len(KNOWN_AGENTS),
-            "known_origins": len(KNOWN_ORIGINS),
-            "known_principals": len(KNOWN_PRINCIPALS),
+            "known_agents": len(records),
+            "known_origins": len(reg.origins()),
+            "known_principals": len(reg.principals()),
             "demo_records": len(DEMO_RECORDS),
+            "agents_active": sum(1 for r in records if r.active),
+            "agents_suspended": sum(1 for r in records if r.lifecycle_state == "suspended"),
+            "agents_revoked": sum(1 for r in records if r.lifecycle_state == "revoked"),
+        },
+        "registry": {
+            "version": reg.version,
+            "state_digest": reg.state_digest(),
+            "journal_length": len(reg.journal()),
+            "chain_ok": chain_ok,
+            "chain_detail": chain_detail,
+            "records_ok": records_ok,
+            "records_detail": records_detail,
         },
         "audit_store": audit_ok,
         "gate": "fail-closed",
@@ -163,6 +179,7 @@ def handle_health(_body, _headers):
 
 def handle_state(_body, _headers):
     auth = build_demo_authorization()
+    reg = default_registry()
     return 200, {
         "mode": MODE,
         "policy_version": POLICY_VERSION,
@@ -170,12 +187,43 @@ def handle_state(_body, _headers):
         "authorization": auth.to_dict(),
         "policies": [r.to_dict() for r in POLICY_TABLE],
         "known": {
-            "agents": list(KNOWN_AGENTS),
-            "origins": list(KNOWN_ORIGINS),
-            "principals": list(KNOWN_PRINCIPALS),
+            "agents": list(reg.agents()),
+            "origins": list(reg.origins()),
+            "principals": list(reg.principals()),
+            "registry_version": reg.version,
+            "registry_digest": reg.state_digest(),
+            "agents_detail": [r.to_dict() for r in reg.records()],
         },
         "records": DEMO_RECORDS,
         "deny_reasons": DENY_REASONS,
+    }
+
+
+def handle_registry(_body, _headers):
+    """Read-only registry inspection.
+
+    There is deliberately NO mutation route. Registry changes are an administrative,
+    in-process operation (see agentfence.registry); exposing register/rotate/revoke over
+    unauthenticated HTTP would be a privilege-escalation primitive, so this endpoint
+    only reports state and the verification status of the mutation chain.
+    """
+    reg = default_registry()
+    chain_ok, chain_detail = reg.verify_chain()
+    records_ok, records_detail = reg.verify_records()
+    return 200, {
+        "registry_version": reg.version,
+        "state_digest": reg.state_digest(),
+        "principals": [{"principal_id": p} for p in reg.principals()],
+        "origins": [{"origin_id": o} for o in reg.origins()],
+        "agents": [r.to_dict() for r in reg.records()],
+        "chain": {
+            "length": len(reg.journal()),
+            "ok": chain_ok,
+            "detail": chain_detail,
+            "mutations": [r.to_dict() for r in reg.journal()],
+        },
+        "records_verification": {"ok": records_ok, "detail": records_detail},
+        "mutable_over_http": False,
     }
 
 
@@ -293,6 +341,7 @@ ROUTES = {
     "GET /": handle_index,
     "GET /index.html": handle_index,
     "GET /api/state": handle_state,
+    "GET /api/registry": handle_registry,
     "POST /api/authorize": handle_authorize,
     "POST /api/approve": handle_approve,
     "POST /api/execute": handle_execute,

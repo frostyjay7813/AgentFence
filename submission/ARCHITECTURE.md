@@ -202,6 +202,67 @@ The prebuilt `function.zip` includes `web/` for exactly this reason.
 5. **Not a delegation model.** Child-agent delegation with attenuation is *not*
    implemented. Binding an authorization to a parent and constraining the child is the
    natural next capability, and the XACML delegation profile is prior art worth reading.
+6. **The agent registry is in-process.** Records and the mutation journal live in
+   memory and are rebuilt from seed on start, so a restart forgets every runtime
+   rotation and revocation. The API shape (register / rotate / suspend / reinstate /
+   revoke, all journalled) is the durable part; persistence is the next step, and the
+   natural home is the same table the receipts already use.
+7. **The registry mutation chain does not detect tail truncation.** It detects
+   modification, reordering and mid-log deletion, because each receipt is sealed and
+   linked to its predecessor. Dropping the most recent receipts still verifies, because
+   nothing external pins the head. Closing that needs an out-of-band anchor (publish or
+   persist the head hash). `tests/test_registry.py` asserts this limitation explicitly
+   rather than implying a stronger guarantee.
+
+---
+
+## Agent registry
+
+`agentfence/registry.py` replaces the three flat tuples that used to live in
+`policy.py`:
+
+```
+KNOWN_AGENTS     = ("research-agent", "support-agent", "analytics-agent")
+KNOWN_ORIGINS    = ("CRM-A", "CRM-B", "CRM-C")
+KNOWN_PRINCIPALS = ("svc-research", "svc-support", "svc-analytics", "human.jay")
+```
+
+A tuple cannot answer "who owns this agent", "what may it touch", or "is it still
+trusted" — the only available answer was "it is in the tuple, so yes", and nothing could
+be withdrawn without editing source and redeploying.
+
+Each agent is now an `AgentRecord`: `agent_id`, `owner`, `capabilities`,
+`allowed_origins`, `lifecycle_state` (`active` / `suspended` / `revoked`), `created_at`,
+`rotated_at`, `revoked_at`, `version`, and a sealed `record_integrity`. Records are
+immutable: a mutation produces a new version, so any snapshot can be re-verified.
+
+**Every mutation is journalled.** `register_principal`, `register_origin`,
+`register_agent`, `rotate_agent`, `suspend_agent`, `reinstate_agent` and `revoke_agent`
+each append a `RegistryReceipt` sealed with the same `af1:sha256` construction as an
+execution receipt and linked to its predecessor by `prev_hash`. `verify_chain()`
+re-verifies index, links and every seal; `GET /api/registry` and `GET /health` report
+the result. Execution receipts also now carry `registry_version` and `registry_digest`,
+so a decision can be tied to the exact registry configuration that produced it.
+
+**Authority split is preserved.** The registry is the *identity* authority (who exists,
+what it may possess, whether it is trusted). `policy.py` remains the sole *effect*
+authority (ALLOW / REQUIRE_APPROVAL / DENY). A registry grant is necessary but never
+sufficient: granting an agent `customer.delete` still yields `POLICY_DENY`, granting
+`customer.write` still yields `APPROVAL_MISSING`, and granting a capability with no
+policy pair still yields `NO_SUCH_POLICY`. This is asserted by tests, not just claimed.
+
+**Fail-closed, and it can only narrow.** An empty registry admits nothing. An
+unregistered agent, principal or origin is a hard DENY. A suspended or revoked agent is
+`AGENT_NOT_ACTIVE`. An empty `capabilities` or `allowed_origins` grant list grants
+nothing — it is not a wildcard. Wildcards are refused at *registration* time (reusing
+the exact rule `issue()` applies at issuance), so an implicit allow can never be
+persisted. An agent cannot be granted an origin that was never declared, an owner must
+already be a registered principal, and an empty registry can only be bootstrapped by a
+principal registering itself.
+
+**No mutation over HTTP.** There is deliberately no POST route for register / rotate /
+revoke: an unauthenticated registry mutation endpoint would be a privilege-escalation
+primitive. `GET /api/registry` is read-only and reports `mutable_over_http: false`.
 
 ---
 
@@ -211,13 +272,15 @@ The prebuilt `function.zip` includes `web/` for exactly this reason.
 agentfence/
   core.py     canonicalization, issue(), integrity, binding + validity checks
   policy.py   deterministic policy table, REQUIRE_APPROVAL, approvals
+  registry.py agent registry: principals, origins, agents, lifecycle, sealed + chained mutations
   gate.py     the ordered pipeline + receipts          <- the security boundary
   api.py      Lambda handler; serves the page and the API on one origin
 web/index.html   single-page demo (renders decisions, decides nothing)
 infra/template.yaml   CloudFormation stack
 scripts/package.py    builds function.zip; fails loudly if content is missing
 scripts/secret_scan.py credential gate for a public repo
-tests/                96 tests: bypass, fail-closed, integrity, approval, receipts, API
+tests/                160 tests: bypass, fail-closed, integrity, approval, receipts,
+                      API, agent registry
 evidence/             captured test logs, runtime evidence, coding-agent proof
 ```
 

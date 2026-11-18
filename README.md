@@ -53,11 +53,13 @@ non-transferable.
 
 ## How it works
 
-Five fields define the context. All five are bound, and all five are re-checked.
+Seven bound fields define the context. All seven are bound, and all seven are re-checked.
 
 | Field | Bound to | Example |
 |---|---|---|
-| **action / capability** | `agentfence/capability` | `customer.read` |
+| **principal** | `agentfence/principal` | `svc-research` |
+| **agent** | `agentfence/agent` | `research-agent` |
+| **capability + action** | `agentfence/capability` | `customer.read` / `read` |
 | **resource** | `agentfence/resource` | `customer/123` |
 | **origin** | `agentfence/origin` | `CRM-A` |
 | **task** | `agentfence/task` | `TASK-184` |
@@ -74,17 +76,40 @@ capability swap reports `CAPABILITY_MISMATCH`, not a generic policy denial.
 | 0 | Schema | malformed request → deny |
 | 1 | Authorization present | missing auth → deny |
 | 2 | **Integrity** | SHA-256 mismatch → deny |
-| 3 | Registries | unknown principal/agent/capability/origin → deny (**no default allow**) |
+| 3 | Registries | unknown principal/agent/origin, or a non-active agent → deny (**no default allow**) |
 | 4 | Validity window | expired or not-yet-valid → deny |
-| 5 | **Policy lookup** | no rule → deny (**no default allow**) |
-| 6 | **Bindings** | any of the 5 fields differs → deny |
+| 5 | **Bindings** | any bound field differs → deny |
+| 6 | **Policy lookup** | no rule → deny (**no default allow**) |
 | 7 | Policy effect | DENY / REQUIRE_APPROVAL → not executed |
 | 8 | Approval | missing/unmatched approval → deny |
-| 9 | Execute | only reachable if 0–8 all passed |
+| 9 | Policy scope | resource prefix, rule origins, or the agent's registry grant → deny |
+| 10 | Execute | only reachable if 0–9 all passed |
 
 **The LLM is never the authorization authority.** It may *propose* an action. A
 deterministic pipeline decides. The browser renders the gate's response; it decides
 nothing.
+
+### The agent registry
+
+Identity used to be three flat tuples in `policy.py` (`KNOWN_AGENTS`, `KNOWN_ORIGINS`,
+`KNOWN_PRINCIPALS`). It is now `agentfence/registry.py`: each agent has an id, an owner,
+the capabilities and origins it is granted, a lifecycle state (`active` / `suspended` /
+`revoked`), and created/rotated/revoked timestamps. Every registry mutation is sealed and
+hash-linked into the same evidence chain the gate uses, so a rotation or revocation is
+recorded rather than being an invisible code edit.
+
+The authority split is unchanged: the **registry is the identity authority** (who exists,
+what it may possess, whether it is trusted) and **`policy.py` is the effect authority**
+(ALLOW / REQUIRE_APPROVAL / DENY). A registry grant is necessary but never sufficient —
+granting `customer.delete` still yields `POLICY_DENY`, and granting `customer.write`
+still yields `APPROVAL_MISSING`.
+
+The registry is fail-closed in the same way the gate is: an empty registry admits
+nothing, an unregistered or non-active agent is denied, an empty grant list is not a
+wildcard, and wildcards are refused at registration time rather than ignored at check
+time. Registry mutation is deliberately **not** exposed over HTTP — `GET /api/registry`
+is read-only. See [`submission/ARCHITECTURE.md`](submission/ARCHITECTURE.md) for the full
+model and its stated limitations.
 
 ### Evidence
 
