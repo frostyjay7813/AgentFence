@@ -5,22 +5,35 @@ This is the module that makes the product claim true or false. The gate is the O
 path to a capability, and it runs a fixed, ordered pipeline. There is no "bypass"
 flag, no debug mode, and no early return that skips a check.
 
-ORDER MATTERS and is asserted by the test suite:
+ORDER MATTERS and is asserted by the test suite (tests/test_gate_posture.py checks that
+every stage label below still exists):
 
+  -- preflight: receipt sealing key -- RECEIPT_KEY_UNAVAILABLE   (no unkeyed receipt)
   0. request schema          -> MALFORMED_REQUEST
   1. authorization present   -> MISSING_AUTHORIZATION
   2. authorization integrity -> INTEGRITY_MISMATCH          (tamper detection FIRST)
-  3. registries              -> UNKNOWN_AGENT/ORIGIN/RESOURCE
-  4. validity window         -> AUTHORIZATION_EXPIRED
-  5. policy lookup           -> NO_SUCH_POLICY              (no default-allow)
-  6. policy effect           -> POLICY_DENY / REQUIRE_APPROVAL
-  7. binding match           -> *_MISMATCH                  (the core invariant)
-  8. approval (if required)  -> APPROVAL_*
+  3. registries              -> UNKNOWN_AGENT / UNKNOWN_ORIGIN
+  4. validity window         -> AUTHORIZATION_EXPIRED        (skew may only shorten it)
+  5. binding match           -> *_MISMATCH                  (the core invariant)
+  6. policy lookup           -> NO_SUCH_POLICY              (no default-allow)
+  7. policy effect           -> POLICY_DENY / REQUIRE_APPROVAL
+  8. approval (if required)  -> APPROVAL_* / REQUESTER_CANNOT_APPROVE
   9. policy scope            -> UNKNOWN_RESOURCE / ORIGIN
- 10. execute                 -> capability invoked
+ 10. capability implementation -> UNKNOWN_CAPABILITY
+ 11. single use             -> AUTHORIZATION_ALREADY_CONSUMED / CONSUME_STORE_UNAVAILABLE
+ 12. execute                -> receipt sealed AND persisted BEFORE the effect
+
+Bindings (5) are checked before policy (6) on purpose: "is this the request that was
+authorized?" is self-contained and must not depend on policy posture, otherwise a
+capability swap would be misreported as a policy denial and would leak the policy
+posture of capabilities the agent was never granted.
 
 Integrity is verified BEFORE binding comparison on purpose: if the authorization was
 tampered with, every downstream comparison is meaningless.
+
+Stages 10-12 were added by the authorization-boundary hardening and can only deny; no
+earlier stage was removed or relaxed. There is exactly one ALLOW construction, and it is
+the final statement.
 
 Denials never fall back to a broader authorization, never self-elevate, and a denial
 is never converted into an approval because execution failed.
